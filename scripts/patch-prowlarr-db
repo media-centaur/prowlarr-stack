@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Idempotently rewrite the qBittorrent download-client row in a Prowlarr DB.
+# Usage: patch-prowlarr-db <db_path> <host> <port> [password]
+#
+# When [password] is provided, it is also written into Settings.password so
+# Prowlarr can authenticate against the qBittorrent WebUI. The password is
+# read from stdin if the literal '-' is passed, to avoid leaking it via argv.
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/common
+source "$here/lib/common"
+
+db="${1:-}"
+host="${2:-}"
+port="${3:-}"
+password_arg="${4:-}"
+
+if [[ -z "$db" || -z "$host" || -z "$port" ]]; then
+  die "usage: patch-prowlarr-db <db_path> <host> <port> [password|-]"
+fi
+
+password=""
+if [[ -n "$password_arg" ]]; then
+  if [[ "$password_arg" == "-" ]]; then
+    password=$(cat)
+  else
+    password="$password_arg"
+  fi
+fi
+
+if [[ ! -f "$db" ]]; then
+  die "DB not found: $db"
+fi
+
+if ! validate_ipv4 "$host" 2>/dev/null; then
+  die "host must be a valid IPv4 address (got: $host)"
+fi
+
+if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+  die "port must be an integer in [1, 65535] (got: $port)"
+fi
+
+# Use SQLite's json_set to rewrite host + port (and optionally password) in
+# the Settings JSON blob for every row with Implementation='QBittorrent'.
+# Idempotent: json_set either adds or updates each field.
+#
+# Password is shell-escaped for SQL by doubling any single quotes ('' is the
+# SQLite literal for a single quote inside a quoted string).
+if [[ -n "$password" ]]; then
+  esc_pw=$(printf '%s' "$password" | sed "s/'/''/g")
+  printf 'UPDATE DownloadClients SET Settings = json_set(Settings, %s, %s, %s, %s, %s, %s) WHERE Implementation = %s;\n' \
+    "'\$.host'" "'$host'" \
+    "'\$.port'" "$port" \
+    "'\$.password'" "'$esc_pw'" \
+    "'QBittorrent'" \
+    | sqlite3 "$db"
+else
+  sqlite3 "$db" "UPDATE DownloadClients SET Settings = json_set(Settings, '\$.host', '$host', '\$.port', $port) WHERE Implementation = 'QBittorrent';"
+fi
+
+# Verify the update landed.
+count=$(sqlite3 "$db" "SELECT COUNT(*) FROM DownloadClients WHERE Implementation='QBittorrent' AND json_extract(Settings, '\$.host') = '$host';")
+if [[ "$count" -lt 1 ]]; then
+  die "patch did not take effect — no QBittorrent row updated"
+fi
+if [[ -n "$password" ]]; then
+  actual_pw=$(sqlite3 "$db" "SELECT json_extract(Settings, '\$.password') FROM DownloadClients WHERE Implementation='QBittorrent' LIMIT 1;")
+  if [[ "$actual_pw" != "$password" ]]; then
+    die "password patch did not take effect"
+  fi
+fi

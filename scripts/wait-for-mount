@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Wait for /mnt/videos to be a mount point (not just a directory on root fs).
+# Polls every 5 seconds for up to 5 minutes.
+
+MOUNT_PATH="/mnt/videos"
+TIMEOUT=300
+INTERVAL=5
+ELAPSED=0
+
+while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
+  if mountpoint -q "$MOUNT_PATH"; then
+    echo "$MOUNT_PATH is mounted"
+    exit 0
+  fi
+  sleep "$INTERVAL"
+  ELAPSED=$((ELAPSED + INTERVAL))
+done
+
+echo "$MOUNT_PATH not mounted after ${TIMEOUT}s" >&2
+exit 1

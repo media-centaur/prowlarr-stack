@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# One-command upgrade for prowlarr-stack.
+#
+# Mode detection (in order):
+#   - .version present  → release mode (GitHub Releases tarball swap)
+#   - .jj/ present      → jj dev mode (fetch + rebase)
+#   - .git/ present     → git dev mode (pull)
+#
+# Flags:
+#   (no flags)       pull source + re-setup + pull images + restart + verify
+#   --code-only      just pull source + re-setup
+#   --images-only    just pull images + restart
+#   --version vX.Y.Z install a specific release (any direction; rollback path)
+#   --yes            skip confirmations
+#   --dry-run        print plan, execute nothing
+set -euo pipefail
+
+cd "$(dirname "$0")"
+source scripts/lib/common
+
+REPO_SLUG="media-centarr/prowlarr-stack"
+
+MODE="all"
+TARGET_VERSION=""
+YES=0
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --code-only) MODE="code"; shift ;;
+    --images-only) MODE="images"; shift ;;
+    --version) TARGET_VERSION="${2:-}"; shift 2 ;;
+    --yes) YES=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help)
+      cat <<HELP
+Usage: ./update [--code-only|--images-only] [--version vX.Y.Z] [--yes] [--dry-run]
+
+  (no flags)       pull source + re-setup + pull images + restart + verify
+  --code-only      just pull source + re-setup (no image pull/restart)
+  --images-only    just pull images + restart
+  --version vX.Y.Z install that specific release (release mode only; any direction)
+  --yes            skip confirmations
+  --dry-run        print what would happen; execute nothing
+HELP
+      exit 0
+      ;;
+    *) die "unknown flag: $1 (try --help)" ;;
+  esac
+done
+
+run() {
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "  (dry-run) $*"
+  else
+    "$@"
+  fi
+}
+
+# --- Mode detection ---
+if [[ -f .version ]]; then
+  UPDATE_MODE=release
+elif [[ -d .jj ]]; then
+  UPDATE_MODE=jj
+elif [[ -d .git ]]; then
+  UPDATE_MODE=git
+else
+  die "can't determine update mode (no .version, .jj, or .git); this dir doesn't look like an installed or developer prowlarr-stack"
+fi
+
+log_phase "update mode: $UPDATE_MODE"
+
+# --- Release mode ---
+release_mode_update() {
+  local current target
+  current=$(cat .version)
+  log_info "current version: $current"
+
+  if [[ -n "$TARGET_VERSION" ]]; then
+    target="$TARGET_VERSION"
+    log_info "target version (pinned): $target"
+  else
+    target=$(github_latest_release "$REPO_SLUG") || die "could not determine latest release"
+    log_info "latest release:  $target"
+  fi
+
+  if version_compare "$current" "$target" eq 2>/dev/null; then
+    log_ok "already at" "$current"
+    if [[ $DRY_RUN -eq 0 ]]; then
+      exit 0
+    fi
+    log_info "(dry-run: would exit 0)"
+    return 0
+  fi
+
+  if [[ $YES -eq 0 ]]; then
+    if ! prompt_yes_no "upgrade $current → $target?" y; then
+      log_info "aborted"
+      exit 0
+    fi
+  fi
+
+  local tmp
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT INT TERM
+
+  local tarball="prowlarr-stack-${target}.tar.gz"
+  local url_tar="https://github.com/$REPO_SLUG/releases/download/${target}/${tarball}"
+  local url_sum="https://github.com/$REPO_SLUG/releases/download/${target}/SHA256SUMS"
+
+  log_phase "downloading $target"
+  run curl -fsSL --max-time 60 -o "$tmp/$tarball" "$url_tar"
+  run curl -fsSL --max-time 30 -o "$tmp/SHA256SUMS" "$url_sum"
+
+  log_phase "verifying checksum"
+  if [[ $DRY_RUN -eq 0 ]]; then
+    (cd "$tmp" && sha256sum -c SHA256SUMS) || die "checksum mismatch — aborting"
+  fi
+
+  log_phase "validating archive safety"
+  if [[ $DRY_RUN -eq 0 ]]; then
+    local bad
+    bad=$(tar tzf "$tmp/$tarball" | awk -v p="prowlarr-stack-${target}/" '
+      /^\// { print "absolute path: "$0; exit }
+      /\.\./ { print "parent-ref:    "$0; exit }
+      $0 !~ "^"p { print "bad prefix:    "$0; exit }
+      { next }
+    ')
+    [[ -z "$bad" ]] || die "tarball rejected: $bad"
+  fi
+
+  log_phase "stopping stack"
+  run systemctl --user stop prowlarr-stack
+
+  log_phase "preserving state"
+  run mkdir -p "$tmp/preserve"
+  if [[ -f .env ]]; then run mv .env "$tmp/preserve/"; fi
+  if [[ -f .envrc ]]; then run mv .envrc "$tmp/preserve/"; fi
+  if [[ -d config ]]; then run mv config "$tmp/preserve/"; fi
+
+  log_phase "swapping in $target"
+  run tar xzf "$tmp/$tarball" -C "$tmp"
+  if [[ $DRY_RUN -eq 0 ]]; then
+    find . -maxdepth 1 -mindepth 1 ! -name MANIFEST -exec rm -rf {} +
+    cp -a "$tmp/prowlarr-stack-$target/." ./
+  fi
+
+  log_phase "restoring state"
+  if [[ -f "$tmp/preserve/.env" ]]; then run mv "$tmp/preserve/.env" ./; fi
+  if [[ -f "$tmp/preserve/.envrc" ]]; then run mv "$tmp/preserve/.envrc" ./; fi
+  if [[ -d "$tmp/preserve/config" ]]; then run mv "$tmp/preserve/config" ./; fi
+
+  log_phase "refreshing MANIFEST"
+  if [[ $DRY_RUN -eq 0 ]]; then
+    write_manifest "$(pwd)" "$target"
+  fi
+
+  log_phase "re-running setup (non-interactive)"
+  run ./setup --non-interactive
+
+  log_phase "pulling images"
+  run docker compose pull
+
+  log_phase "restarting stack"
+  run systemctl --user start prowlarr-stack
+
+  if [[ $DRY_RUN -eq 0 ]]; then
+    log_phase "waiting for gluetun tunnel (up to 60s)"
+    if wait_for_gluetun_healthy 60; then
+      log_ok "gluetun" "healthy"
+    else
+      die "gluetun did not reach healthy post-restart — check: docker logs gluetun"
+    fi
+  fi
+
+  if [[ $DRY_RUN -eq 0 ]]; then
+    ./check
+  fi
+}
+
+# --- Dev modes (jj / git) ---
+dev_mode_update() {
+  if [[ "$MODE" != "images" ]]; then
+    log_phase "source update ($UPDATE_MODE)"
+    if [[ "$UPDATE_MODE" == "jj" ]]; then
+      run jj git fetch
+      run jj rebase -d 'main@origin' || log_warn "rebase onto main@origin failed — resolve manually"
+    else
+      run git pull --ff-only
+    fi
+    log_ok "source" "up to date"
+
+    log_phase "re-running setup (non-interactive)"
+    run ./setup --non-interactive
+  fi
+
+  if [[ "$MODE" != "code" ]]; then
+    log_phase "pulling images"
+    run docker compose pull
+    log_phase "restarting stack"
+    run systemctl --user restart prowlarr-stack
+
+    if [[ $DRY_RUN -eq 0 ]]; then
+      log_phase "waiting for gluetun tunnel (up to 60s)"
+      if wait_for_gluetun_healthy 60; then
+        log_ok "gluetun" "healthy"
+      else
+        die "gluetun did not reach healthy post-restart — check: docker logs gluetun"
+      fi
+    fi
+  fi
+
+  if [[ $DRY_RUN -eq 0 ]]; then
+    ./check
+  fi
+}
+
+if [[ "$UPDATE_MODE" == "release" ]]; then
+  if [[ -n "$TARGET_VERSION" && "$MODE" != "all" ]]; then
+    die "--version is not compatible with --code-only or --images-only in release mode"
+  fi
+  release_mode_update
+else
+  if [[ -n "$TARGET_VERSION" ]]; then
+    die "--version only works in release mode (no .version file here)"
+  fi
+  dev_mode_update
+fi
+
+echo ""
+echo "${COLOR_BOLD}${COLOR_GREEN}update complete.${COLOR_RESET}"

@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create releases
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for changelog parsing
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VERSION"
+
+      - name: Install shellcheck + sqlite3
+        run: sudo apt-get update && sudo apt-get install -y shellcheck sqlite3
+
+      - name: Run release checks (belt + suspenders)
+        run: ./scripts/release-checks
+
+      - name: Build release tarball
+        id: tarball
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          PREFIX="prowlarr-stack-$VERSION"
+          WORKDIR=$(mktemp -d)
+
+          # Export HEAD into a clean workdir under the expected prefix.
+          mkdir -p "$WORKDIR/$PREFIX"
+          git archive --format=tar HEAD | tar -x -C "$WORKDIR/$PREFIX"
+
+          # Inject .version into the archive (gitignored in repo, present in tarball).
+          echo "$VERSION" > "$WORKDIR/$PREFIX/.version"
+
+          # Create the tarball.
+          (cd "$WORKDIR" && tar czf "$PREFIX.tar.gz" "$PREFIX")
+          mv "$WORKDIR/$PREFIX.tar.gz" .
+
+          # SHA256SUMS
+          sha256sum "$PREFIX.tar.gz" > SHA256SUMS
+
+          echo "tarball=$PREFIX.tar.gz" >> "$GITHUB_OUTPUT"
+
+          echo "---- tarball contents (first 20) ----"
+          # head closing stdin early would SIGPIPE tar under pipefail; capture first.
+          tar tzf "$PREFIX.tar.gz" > /tmp/tarball-listing.txt
+          head -20 /tmp/tarball-listing.txt
+          echo "(... $(wc -l < /tmp/tarball-listing.txt) total entries)"
+          echo "---- SHA256SUMS ----"
+          cat SHA256SUMS
+
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          NOV="${VERSION#v}"
+          # Extract the block under "## [X.Y.Z]" up to the next "## [" or EOF.
+          awk -v v="$NOV" '
+            /^## \[/ {
+              if (in_block) { exit }
+              in_block = ($0 ~ "\\["v"\\]") ? 1 : 0
+              if (in_block) { print; next }
+              next
+            }
+            in_block { print }
+          ' CHANGELOG.md > release_notes.md
+          if [[ ! -s release_notes.md ]]; then
+            {
+              echo "Release $VERSION"
+              echo ""
+              echo "(No CHANGELOG entry found for this version.)"
+            } > release_notes.md
+          fi
+          echo "---- release notes ----"
+          cat release_notes.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release_notes.md
+          files: |
+            ${{ steps.tarball.outputs.tarball }}
+            SHA256SUMS
+          fail_on_unmatched_files: true

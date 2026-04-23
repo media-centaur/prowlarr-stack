@@ -1,0 +1,19 @@
+config/
+downloads/
+.env
+.envrc
+.version
+MANIFEST
+tests/fixtures/*.tmp
+
+# AI-assistant tooling (per-developer state and instructions; not part of the project)
+.claude/
+CLAUDE.md
+.serena/
+.anthropic/
+.aider*
+.cursor/
+.continue/
+.codex/
+.copilot/
+.windsurf/

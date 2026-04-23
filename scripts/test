@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Pure-bash test runner. Executes every tests/*.test file and tallies results.
+set -u
+
+cd "$(dirname "$0")/.." || exit 1
+
+pass=0
+fail=0
+
+shopt -s nullglob
+for file in tests/*.test; do
+  # Each test file defines test_* functions and registers itself via a convention.
+  # The runner sources the file in a subshell per test function so state can't leak.
+  while IFS= read -r fn; do
+    output=$(bash -c "set -e; source '$file'; $fn" 2>&1)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+      pass=$((pass + 1))
+      echo "  PASS  $file::$fn"
+    else
+      fail=$((fail + 1))
+      echo "  FAIL  $file::$fn"
+      echo "$output" | sed 's/^/        /'
+    fi
+  done < <(grep -oE '^test_[a-zA-Z0-9_]+' "$file" | sort -u)
+done
+
+echo ""
+echo "$pass passed, $fail failed"
+
+if [[ $fail -gt 0 ]]; then
+  exit 1
+fi

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+files=(
+  "config/prowlarr/config.xml:defaults/prowlarr/config.xml"
+  "config/prowlarr/prowlarr.db:defaults/prowlarr/prowlarr.db"
+  "config/qbittorrent/qBittorrent/qBittorrent.conf:defaults/qbittorrent/qBittorrent.conf"
+  "config/qbittorrent/qBittorrent/categories.json:defaults/qbittorrent/categories.json"
+)
+
+for entry in "${files[@]}"; do
+  src="${entry%%:*}"
+  dst="${entry##*:}"
+
+  if [[ ! -f "$src" ]]; then
+    echo "SKIP  $src (not found)"
+    continue
+  fi
+
+  mkdir -p "$(dirname "$dst")"
+  cp "$src" "$dst"
+  echo "  OK  $src → $dst"
+done
+
+echo ""
+echo "Extraction complete. Review defaults/ then commit."

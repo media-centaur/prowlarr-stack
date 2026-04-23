@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# prowlarr-stack first-time installer, lives inside the release tarball.
+# End users don't normally invoke this directly — install.sh execs it after
+# extraction, and manual-tarball users run it after they extract.
+#
+# Responsibilities:
+#   1. Sanity-check we're in an extracted tarball.
+#   2. Delegate to ./setup for config + start + verify.
+#   3. On successful setup, write MANIFEST describing what we installed.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+source scripts/lib/common
+
+# Sanity: are we in an extracted tarball / installed dir?
+for required in .version docker-compose.yml setup scripts/lib/common; do
+  if [[ ! -e "$required" ]]; then
+    die "./install must run from the root of an extracted prowlarr-stack release (missing: $required)"
+  fi
+done
+
+VERSION=$(cat .version)
+INSTALL_DIR="$(pwd)"
+
+echo ""
+echo "${COLOR_BOLD}prowlarr-stack $VERSION${COLOR_RESET}"
+echo "install dir: $INSTALL_DIR"
+
+# Run interactive setup (does prereqs, config, seed, patch DB, systemd, start, verify).
+./setup "$@"
+
+# Setup succeeded — write MANIFEST last so it reflects final state.
+log_phase "writing MANIFEST"
+write_manifest "$INSTALL_DIR" "$VERSION"
+log_ok "MANIFEST" "written to $INSTALL_DIR/MANIFEST"
+
+echo ""
+echo "${COLOR_BOLD}${COLOR_GREEN}install complete.${COLOR_RESET}"
+echo "  inventory:   cat $INSTALL_DIR/MANIFEST"
+echo "  update:      $INSTALL_DIR/update"
+echo "  verify:      $INSTALL_DIR/check"
+echo "  uninstall:   $INSTALL_DIR/uninstall"

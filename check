@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Standalone VPN-isolation verifier for prowlarr-stack.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+source scripts/lib/common
+
+# Quick sanity: gluetun health.
+log_phase "gluetun health"
+status=$(docker inspect --format '{{.State.Health.Status}}' gluetun 2>/dev/null || echo "missing")
+case "$status" in
+  healthy) log_ok "gluetun" "$status" ;;
+  missing) die "gluetun container is not running — start the stack first" ;;
+  *) log_fail "gluetun" "$status"; die "gluetun is not healthy — check: docker logs gluetun" ;;
+esac
+
+verify_isolation

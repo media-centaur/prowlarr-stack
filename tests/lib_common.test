@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -u
+
+# shellcheck source=../scripts/lib/common
+source "./scripts/lib/common"
+
+test_validate_wg_key_accepts_valid_key() {
+  # 44-char base64, ends with "="
+  local key="4vbuVFvsInANUUU962GnOsM8E38uxq2zp8CE6kB2xlA="
+  validate_wg_key "$key"
+}
+
+test_validate_wg_key_rejects_short_key() {
+  ! validate_wg_key "tooshort"
+}
+
+test_validate_wg_key_rejects_invalid_chars() {
+  ! validate_wg_key "aGVsbG8xMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTA!"
+}
+
+test_validate_wg_key_rejects_empty() {
+  ! validate_wg_key ""
+}
+
+test_validate_ipv4_accepts_valid() {
+  validate_ipv4 "192.168.1.10"
+  validate_ipv4 "10.0.0.1"
+  validate_ipv4 "255.255.255.255"
+  validate_ipv4 "0.0.0.0"
+}
+
+test_validate_ipv4_rejects_out_of_range() {
+  ! validate_ipv4 "256.1.1.1"
+  ! validate_ipv4 "1.1.1.300"
+}
+
+test_validate_ipv4_rejects_non_ip() {
+  ! validate_ipv4 "not.an.ip"
+  ! validate_ipv4 ""
+  ! validate_ipv4 "192.168.1"
+  ! validate_ipv4 "192.168.1.1.1"
+}
+
+test_validate_cidr_accepts_valid() {
+  validate_cidr "192.168.1.0/24"
+  validate_cidr "10.0.0.0/8"
+  validate_cidr "172.16.0.0/12"
+  validate_cidr "0.0.0.0/0"
+  validate_cidr "192.168.1.1/32"
+}
+
+test_validate_cidr_rejects_bad_prefix() {
+  ! validate_cidr "192.168.1.0/33"
+  ! validate_cidr "192.168.1.0/-1"
+  ! validate_cidr "192.168.1.0/"
+}
+
+test_validate_cidr_rejects_bad_ip() {
+  ! validate_cidr "999.1.1.1/24"
+  ! validate_cidr "not-a-cidr"
+  ! validate_cidr "192.168.1.0"
+}
+
+test_detect_host_lan_ip_parses_ip_route() {
+  # Fixture: typical output of `ip route get 1.1.1.1`
+  local fixture='1.1.1.1 via 192.168.1.1 dev wlan0 src 192.168.1.10 uid 1000'
+  local result
+  result=$(detect_host_lan_ip "$fixture")
+  [[ "$result" == "192.168.1.10" ]]
+}
+
+test_detect_host_lan_ip_returns_nonzero_on_garbage() {
+  ! detect_host_lan_ip "no src here"
+}
+
+test_detect_lan_subnet_finds_cidr_for_ip() {
+  # Fixture: typical output of `ip -o -f inet addr show`
+  local fixture='1: lo    inet 127.0.0.1/8 scope host lo\
+2: wlan0    inet 192.168.1.10/24 scope global wlan0'
+  local result
+  result=$(detect_lan_subnet "192.168.1.10" "$(echo -e "$fixture")")
+  [[ "$result" == "192.168.1.0/24" ]]
+}
+
+test_detect_lan_subnet_handles_missing_ip() {
+  local fixture='2: wlan0    inet 192.168.1.10/24 scope global wlan0'
+  ! detect_lan_subnet "10.0.0.1" "$fixture"
+}
+
+test_read_env_value_returns_existing() {
+  local tmp; tmp=$(mktemp)
+  echo "FOO=bar" > "$tmp"
+  echo "BAZ=qux quux" >> "$tmp"
+  local result; result=$(read_env_value "$tmp" FOO)
+  [[ "$result" == "bar" ]]
+  rm -f "$tmp"
+}
+
+test_read_env_value_handles_quoted() {
+  local tmp; tmp=$(mktemp)
+  echo 'KEY="hello world"' > "$tmp"
+  local result; result=$(read_env_value "$tmp" KEY)
+  [[ "$result" == "hello world" ]]
+  rm -f "$tmp"
+}
+
+test_read_env_value_missing_returns_empty() {
+  local tmp; tmp=$(mktemp)
+  echo "FOO=bar" > "$tmp"
+  local result; result=$(read_env_value "$tmp" MISSING)
+  [[ -z "$result" ]]
+  rm -f "$tmp"
+}
+
+test_write_env_value_adds_new_key() {
+  local tmp; tmp=$(mktemp)
+  echo "FOO=bar" > "$tmp"
+  write_env_value "$tmp" NEW "hello"
+  grep -q '^NEW=hello$' "$tmp"
+  rm -f "$tmp"
+}
+
+test_write_env_value_updates_existing() {
+  local tmp; tmp=$(mktemp)
+  printf 'FOO=old\nBAR=keep\n' > "$tmp"
+  write_env_value "$tmp" FOO "new"
+  grep -q '^FOO=new$' "$tmp"
+  grep -q '^BAR=keep$' "$tmp"
+  ! grep -q '^FOO=old$' "$tmp"
+  rm -f "$tmp"
+}
+
+test_write_env_value_sets_600_permissions() {
+  local tmp; tmp=$(mktemp)
+  write_env_value "$tmp" FOO "bar"
+  local perms; perms=$(stat -c '%a' "$tmp")
+  [[ "$perms" == "600" ]]
+  rm -f "$tmp"
+}
+
+test_write_env_value_quotes_values_with_spaces() {
+  local tmp; tmp=$(mktemp)
+  write_env_value "$tmp" KEY "hello world"
+  grep -q '^KEY="hello world"$' "$tmp"
+  rm -f "$tmp"
+}
+
+test_validate_vpn_provider_accepts_known_slugs() {
+  for slug in nordvpn protonvpn mullvad surfshark ivpn airvpn windscribe; do
+    validate_vpn_provider "$slug"
+  done
+}
+
+test_validate_vpn_provider_accepts_unknown_lowercase_slug() {
+  validate_vpn_provider "giganews"
+  validate_vpn_provider "custom_provider"
+}
+
+test_validate_vpn_provider_rejects_empty_or_malformed() {
+  ! validate_vpn_provider ""
+  ! validate_vpn_provider "UPPERCASE"
+  ! validate_vpn_provider "has spaces"
+  ! validate_vpn_provider "Has!Bangs"
+}
+
+test_provider_needs_addresses_known_provider() {
+  # nordvpn → needs_addresses=0 → function returns 1 (no)
+  ! provider_needs_addresses "nordvpn"
+  # mullvad → needs_addresses=1 → function returns 0 (yes)
+  provider_needs_addresses "mullvad"
+}
+
+test_provider_needs_addresses_unknown_defaults_to_yes() {
+  # unknown slug → prompt optionally → returns 0 (yes)
+  provider_needs_addresses "giganews"
+}

@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -u
+
+# shellcheck source=../scripts/lib/common
+source "./scripts/lib/common"
+
+test_write_manifest_creates_file_with_version_header() {
+  local tmp; tmp=$(mktemp -d)
+  write_manifest "$tmp" "v0.1.0" >/dev/null
+  [[ -f "$tmp/MANIFEST" ]]
+  head -1 "$tmp/MANIFEST" | grep -qE '^prowlarr-stack v0\.1\.0'
+  rm -rf "$tmp"
+}
+
+test_write_manifest_includes_install_dir_and_user() {
+  local tmp; tmp=$(mktemp -d)
+  write_manifest "$tmp" "v0.1.0" >/dev/null
+  grep -qE "^install dir:[[:space:]]+$tmp" "$tmp/MANIFEST"
+  grep -qE "^user:[[:space:]]+$(id -un)" "$tmp/MANIFEST"
+  rm -rf "$tmp"
+}
+
+test_write_manifest_includes_expected_files_section() {
+  local tmp; tmp=$(mktemp -d)
+  write_manifest "$tmp" "v0.1.0" >/dev/null
+  grep -qE '^file:[[:space:]]+\.env[[:space:]]+mode:600' "$tmp/MANIFEST"
+  grep -qE '^file:[[:space:]]+\.version[[:space:]]+mode:644' "$tmp/MANIFEST"
+  grep -qE '^file:[[:space:]]+MANIFEST[[:space:]]+mode:644' "$tmp/MANIFEST"
+  rm -rf "$tmp"
+}
+
+test_parse_manifest_images_returns_pins_from_compose() {
+  local tmp; tmp=$(mktemp -d)
+  cat > "$tmp/docker-compose.yml" <<'COMPOSE'
+services:
+  gluetun:
+    image: qmcgaw/gluetun:v3.40.0
+  prowlarr:
+    image: linuxserver/prowlarr:1.28.2
+COMPOSE
+  write_manifest "$tmp" "v0.1.0" >/dev/null
+  local lines
+  lines=$(parse_manifest_images "$tmp/MANIFEST" | wc -l)
+  [[ "$lines" == "2" ]]
+  parse_manifest_images "$tmp/MANIFEST" | grep -q '^qmcgaw/gluetun:v3.40.0$'
+  parse_manifest_images "$tmp/MANIFEST" | grep -q '^linuxserver/prowlarr:1.28.2$'
+  rm -rf "$tmp"
+}
+
+test_parse_manifest_version_returns_tag() {
+  local tmp; tmp=$(mktemp -d)
+  write_manifest "$tmp" "v0.3.1" >/dev/null
+  local v; v=$(parse_manifest_version "$tmp/MANIFEST")
+  [[ "$v" == "v0.3.1" ]]
+  rm -rf "$tmp"
+}
+
+test_parse_manifest_files_lists_expected_set() {
+  local tmp; tmp=$(mktemp -d)
+  write_manifest "$tmp" "v0.1.0" >/dev/null
+  parse_manifest_files "$tmp/MANIFEST" | grep -q '^\.env$'
+  parse_manifest_files "$tmp/MANIFEST" | grep -q '^config/prowlarr/prowlarr\.db$'
+  rm -rf "$tmp"
+}
+
+test_parse_manifest_systemd_unit_returns_path() {
+  local tmp; tmp=$(mktemp -d)
+  write_manifest "$tmp" "v0.1.0" >/dev/null
+  local unit; unit=$(parse_manifest_systemd_unit "$tmp/MANIFEST")
+  [[ "$unit" == "$HOME/.config/systemd/user/prowlarr-stack.service" ]]
+  rm -rf "$tmp"
+}

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# scripts/bump-images — interactive helper to update pinned image versions in
+# docker-compose.yml. Maintainer runs this before cutting a release.
+#
+# For each service, prints the current pin and prompts for a new tag; press
+# Enter to keep the current value. Prints the diff at the end for review.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+source scripts/lib/common
+
+log_phase "bump-images"
+
+# Image repositories to bump. Maintainer-editable list.
+REPOS=(
+  "qmcgaw/gluetun"
+  "linuxserver/prowlarr"
+  "ghcr.io/flaresolverr/flaresolverr"
+  "linuxserver/qbittorrent"
+)
+
+changed=0
+for repo in "${REPOS[@]}"; do
+  # Extract current tag: find the line starting with "image: $repo:" and take everything after the colon-tag.
+  current=$(grep -E "^\s*image:\s*${repo}:" docker-compose.yml | head -1 | sed -E "s|^.*${repo}:([^ ]+).*|\1|")
+  if [[ -z "$current" ]]; then
+    log_warn "$repo not found in docker-compose.yml — skipping"
+    continue
+  fi
+  log_info "$repo currently pinned to: $current"
+  new=$(prompt_with_default "  new tag (Enter to keep)" "$current")
+  if [[ "$new" != "$current" ]]; then
+    sed -i.bak "s|${repo}:${current}|${repo}:${new}|g" docker-compose.yml
+    rm -f docker-compose.yml.bak
+    log_ok "$repo" "bumped $current → $new"
+    changed=$((changed + 1))
+  fi
+done
+
+if [[ $changed -eq 0 ]]; then
+  log_info "no changes"
+  exit 0
+fi
+
+echo ""
+log_phase "diff"
+if command -v jj >/dev/null 2>&1 && [[ -d .jj ]]; then
+  jj diff docker-compose.yml
+elif command -v git >/dev/null 2>&1 && [[ -d .git ]]; then
+  git diff docker-compose.yml
+else
+  log_warn "neither jj nor git available — review docker-compose.yml manually"
+fi
+
+log_info "Remember to update CHANGELOG.md under [Unreleased] before committing."

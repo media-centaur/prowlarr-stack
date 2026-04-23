@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+systemctl --user start prowlarr-stack
+systemctl --user status prowlarr-stack --no-pager

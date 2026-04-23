@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# scripts/release-checks — runs all release-gate checks: shellcheck on every
+# bash file, validate docker-compose.yml, run the bash test suite.
+#
+# Used by CI (.github/workflows/ci.yml + release.yml) and by the maintainer
+# locally before tagging a release. Idempotent and safe to re-run.
+#
+# Exits non-zero on any failure. Prints a concise pass/fail line per check.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+failures=0
+pass() { printf "  \033[32m✓\033[0m  %s\n" "$1"; }
+fail() { printf "  \033[31m✗\033[0m  %s\n" "$1" >&2; failures=$((failures + 1)); }
+section() { printf "\n\033[1;34m▸ %s\033[0m\n" "$1"; }
+
+# --- shellcheck ---
+section "shellcheck"
+if ! command -v shellcheck >/dev/null 2>&1; then
+  printf "  \033[33m!\033[0m  shellcheck not installed; skipping (pacman -S shellcheck | apt install shellcheck)\n" >&2
+  printf "       %s\n" "CI installs shellcheck explicitly, so this is only informational locally."
+else
+  # Files with executables. Library files use -s bash since they have no shebang.
+  # All bash scripts. set-qbt-password is python, not bash, so excluded.
+  bash_scripts=(
+    install.sh setup check update install uninstall
+    scripts/bump-images scripts/patch-prowlarr-db scripts/test
+    scripts/start scripts/stop scripts/restart scripts/wait-for-mount
+    scripts/release-checks
+  )
+  # Use --severity=warning to skip info/style noise; fix real warnings inline.
+  sc_opts=(-x --severity=warning)
+  for f in "${bash_scripts[@]}"; do
+    [[ -f "$f" ]] || continue
+    if shellcheck "${sc_opts[@]}" "$f" 2>/dev/null; then
+      pass "$f"
+    else
+      fail "$f"
+      shellcheck "${sc_opts[@]}" "$f" >&2 || true
+    fi
+  done
+  if [[ -f scripts/lib/common ]]; then
+    if shellcheck -s bash --severity=warning scripts/lib/common 2>/dev/null; then
+      pass "scripts/lib/common"
+    else
+      fail "scripts/lib/common"
+      shellcheck -s bash --severity=warning scripts/lib/common >&2 || true
+    fi
+  fi
+fi
+
+# --- docker compose validate ---
+section "docker compose config"
+tmp_env=$(mktemp)
+trap 'rm -f "$tmp_env"' EXIT
+cat > "$tmp_env" <<'EOF'
+VPN_SERVICE_PROVIDER=nordvpn
+WIREGUARD_PRIVATE_KEY=aGVsbG8xMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTA=
+WIREGUARD_ADDRESSES=
+WIREGUARD_PRESHARED_KEY=
+SERVER_COUNTRIES=Netherlands
+LAN_SUBNET=192.168.1.0/24
+HOST_LAN_IP=192.168.1.10
+EOF
+if docker compose --env-file "$tmp_env" config >/dev/null 2>&1; then
+  pass "docker-compose.yml validates"
+else
+  fail "docker-compose.yml fails to validate"
+  docker compose --env-file "$tmp_env" config >&2 || true
+fi
+
+# --- bash unit test suite ---
+section "bash test suite"
+if ./scripts/test; then
+  pass "all unit tests pass"
+else
+  fail "unit test failures"
+fi
+
+echo ""
+if [[ $failures -gt 0 ]]; then
+  printf "\033[31m%d check(s) failed\033[0m\n" "$failures" >&2
+  exit 1
+fi
+printf "\033[32mall release checks passed\033[0m\n"

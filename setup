@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+# Interactive turn-key installer for prowlarr-stack.
+# Usage:
+#   ./setup                  interactive, uses existing .env values as defaults
+#   ./setup --reconfigure    re-prompts every field
+#   ./setup --non-interactive skips prompts; fails fast on missing required vars
+set -euo pipefail
+
+cd "$(dirname "$0")"
+source scripts/lib/common
+
+# --- flags ---
+RECONFIGURE=0
+NONINTERACTIVE=0
+for arg in "$@"; do
+  case "$arg" in
+    --reconfigure) RECONFIGURE=1 ;;
+    --non-interactive) NONINTERACTIVE=1 ;;
+    -h|--help)
+      cat <<HELP
+Usage: ./setup [--reconfigure] [--non-interactive]
+
+  (no flags)          interactive install, uses .env values as defaults
+  --reconfigure       re-prompt every field even if .env has a value
+  --non-interactive   skip prompts; fail fast on missing required vars
+HELP
+      exit 0
+      ;;
+    *) die "unknown flag: $arg (try --help)" ;;
+  esac
+done
+
+echo ""
+echo "${COLOR_BOLD}prowlarr-stack installer${COLOR_RESET}"
+
+# --- Phase 1: prerequisites ---
+log_phase "prerequisites"
+run_prereqs || die "fix missing prerequisites and re-run ./setup"
+
+# --- Phase 2: configuration ---
+log_phase "configuration"
+
+ENV_FILE=".env"
+touch "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+
+# Read existing values (empty string if absent).
+wg_key=$(read_env_value "$ENV_FILE" WIREGUARD_PRIVATE_KEY)
+countries=$(read_env_value "$ENV_FILE" SERVER_COUNTRIES)
+lan_ip=$(read_env_value "$ENV_FILE" HOST_LAN_IP)
+lan_subnet=$(read_env_value "$ENV_FILE" LAN_SUBNET)
+
+# Provider selection (first, since it drives what else we ask for).
+provider=$(read_env_value "$ENV_FILE" VPN_SERVICE_PROVIDER)
+if [[ -z "$provider" || $RECONFIGURE -eq 1 ]]; then
+  if [[ $NONINTERACTIVE -eq 1 ]]; then
+    die "VPN_SERVICE_PROVIDER is not set in .env and --non-interactive was passed"
+  fi
+  log_info "Supported providers: ${!VPN_PROVIDERS[*]}"
+  provider=$(prompt_with_default "VPN provider" "${provider:-nordvpn}" validate_vpn_provider)
+fi
+validate_vpn_provider "$provider" >/dev/null 2>&1 || die "invalid VPN_SERVICE_PROVIDER in .env: $provider"
+
+# Provider-specific key source hint, then the key prompt.
+if [[ -z "$wg_key" || $RECONFIGURE -eq 1 ]]; then
+  if [[ $NONINTERACTIVE -eq 1 ]]; then
+    die "WIREGUARD_PRIVATE_KEY is not set in .env and --non-interactive was passed"
+  fi
+  log_info "$(provider_key_hint "$provider")"
+  wg_key=$(prompt_secret "WireGuard private key (44-char base64)" validate_wg_key)
+fi
+validate_wg_key "$wg_key" >/dev/null 2>&1 || die "invalid WireGuard key in .env: ${wg_key:0:4}…"
+
+# Conditional: addresses.
+wg_addresses=$(read_env_value "$ENV_FILE" WIREGUARD_ADDRESSES)
+if provider_needs_addresses "$provider"; then
+  if [[ -z "$wg_addresses" || $RECONFIGURE -eq 1 ]]; then
+    if [[ $NONINTERACTIVE -eq 1 ]]; then
+      # Only listed providers that strictly require it should die; unknown
+      # providers in non-interactive mode accept blank silently.
+      if [[ -n "${VPN_PROVIDERS[$provider]:-}" ]]; then
+        die "$provider requires WIREGUARD_ADDRESSES; not set in .env"
+      fi
+    else
+      wg_addresses=$(prompt_with_default "WireGuard addresses (e.g. 10.64.222.21/32, blank if unused)" "${wg_addresses:- }")
+      [[ "$wg_addresses" == " " ]] && wg_addresses=""
+    fi
+  fi
+fi
+
+# Conditional: preshared key.
+wg_preshared=$(read_env_value "$ENV_FILE" WIREGUARD_PRESHARED_KEY)
+if provider_needs_preshared "$provider"; then
+  if [[ -z "$wg_preshared" || $RECONFIGURE -eq 1 ]]; then
+    if [[ $NONINTERACTIVE -eq 1 ]]; then
+      if [[ -n "${VPN_PROVIDERS[$provider]:-}" ]]; then
+        die "$provider requires WIREGUARD_PRESHARED_KEY; not set in .env"
+      fi
+    else
+      # Empty is acceptable for unknown providers; validator runs only if non-empty.
+      wg_preshared=$(prompt_with_default "WireGuard preshared key (blank if unused)" "${wg_preshared:- }")
+      [[ "$wg_preshared" == " " ]] && wg_preshared=""
+      if [[ -n "$wg_preshared" ]]; then
+        validate_wg_key "$wg_preshared" 2>/dev/null || die "preshared key has wrong format (expected 44-char base64)"
+      fi
+    fi
+  fi
+fi
+
+# Countries.
+if [[ -z "$countries" ]]; then countries="Netherlands"; fi
+if [[ $RECONFIGURE -eq 1 || -z "$(read_env_value "$ENV_FILE" SERVER_COUNTRIES)" ]]; then
+  if [[ $NONINTERACTIVE -eq 0 ]]; then
+    countries=$(prompt_with_default "Exit country (or comma-separated list)" "$countries")
+  fi
+fi
+
+# LAN IP — auto-detect if missing.
+if [[ -z "$lan_ip" || $RECONFIGURE -eq 1 ]]; then
+  local_detected=$(detect_host_lan_ip || echo "")
+  if [[ $NONINTERACTIVE -eq 1 ]]; then
+    [[ -n "$local_detected" ]] || die "cannot auto-detect HOST_LAN_IP and --non-interactive was passed"
+    lan_ip="$local_detected"
+  else
+    default_ip="${lan_ip:-$local_detected}"
+    if [[ -z "$default_ip" ]]; then
+      lan_ip=$(prompt_with_default "Host LAN IP" "" validate_ipv4)
+    else
+      lan_ip=$(prompt_with_default "Host LAN IP" "$default_ip" validate_ipv4)
+    fi
+  fi
+fi
+validate_ipv4 "$lan_ip" >/dev/null || die "invalid HOST_LAN_IP: $lan_ip"
+
+# LAN subnet — auto-detect if missing.
+if [[ -z "$lan_subnet" || $RECONFIGURE -eq 1 ]]; then
+  subnet_detected=$(detect_lan_subnet "$lan_ip" || echo "")
+  if [[ $NONINTERACTIVE -eq 1 ]]; then
+    [[ -n "$subnet_detected" ]] || die "cannot auto-detect LAN_SUBNET and --non-interactive was passed"
+    lan_subnet="$subnet_detected"
+  else
+    default_subnet="${lan_subnet:-$subnet_detected}"
+    if [[ -z "$default_subnet" ]]; then
+      lan_subnet=$(prompt_with_default "LAN subnet (CIDR)" "" validate_cidr)
+    else
+      lan_subnet=$(prompt_with_default "LAN subnet (CIDR)" "$default_subnet" validate_cidr)
+    fi
+  fi
+fi
+validate_cidr "$lan_subnet" >/dev/null || die "invalid LAN_SUBNET: $lan_subnet"
+
+# --- Phase 3: write .env ---
+log_phase "writing .env"
+write_env_value "$ENV_FILE" VPN_SERVICE_PROVIDER "$provider"
+write_env_value "$ENV_FILE" WIREGUARD_PRIVATE_KEY "$wg_key"
+write_env_value "$ENV_FILE" WIREGUARD_ADDRESSES "$wg_addresses"
+write_env_value "$ENV_FILE" WIREGUARD_PRESHARED_KEY "$wg_preshared"
+write_env_value "$ENV_FILE" SERVER_COUNTRIES "$countries"
+write_env_value "$ENV_FILE" HOST_LAN_IP "$lan_ip"
+write_env_value "$ENV_FILE" LAN_SUBNET "$lan_subnet"
+log_ok ".env" "written (chmod 600)"
+
+# direnv integration (opt-in).
+if [[ $NONINTERACTIVE -eq 0 ]] && command -v direnv >/dev/null 2>&1 && [[ ! -f .envrc ]]; then
+  if prompt_yes_no "detected direnv — create .envrc to auto-load .env in this dir?" n; then
+    echo "dotenv" > .envrc
+    direnv allow . 2>/dev/null || log_warn "direnv allow failed — run it manually"
+    log_ok ".envrc" "created and allowed"
+  fi
+fi
+
+# --- Phase 4: seed config/ from defaults/ ---
+log_phase "seeding config/"
+files=(
+  "defaults/prowlarr/config.xml:config/prowlarr/config.xml"
+  "defaults/prowlarr/prowlarr.db:config/prowlarr/prowlarr.db"
+  "defaults/qbittorrent/qBittorrent.conf:config/qbittorrent/qBittorrent/qBittorrent.conf"
+  "defaults/qbittorrent/categories.json:config/qbittorrent/qBittorrent/categories.json"
+)
+for entry in "${files[@]}"; do
+  src="${entry%%:*}"
+  dst="${entry##*:}"
+  if [[ ! -f "$src" ]]; then
+    log_warn "$src missing from defaults — skipping"
+    continue
+  fi
+  if [[ -f "$dst" ]]; then
+    log_ok "$dst" "already present"
+    continue
+  fi
+  mkdir -p "$(dirname "$dst")"
+  cp "$src" "$dst"
+  log_ok "$dst" "seeded"
+done
+
+# --- Phase 5: qBittorrent static password ---
+# Resolved before the prowlarr-db patch so the same value can be pushed into
+# both qBittorrent's conf and Prowlarr's download-client row in one pass.
+log_phase "qBittorrent password"
+qbt_pw=$(read_env_value "$ENV_FILE" QBITTORRENT_PASSWORD)
+if [[ -z "$qbt_pw" ]]; then
+  qbt_pw="adminadmin"
+  write_env_value "$ENV_FILE" QBITTORRENT_PASSWORD "$qbt_pw"
+  log_ok "QBITTORRENT_PASSWORD" "default 'adminadmin' saved to .env"
+else
+  log_ok "QBITTORRENT_PASSWORD" "read from .env"
+fi
+QBT_CONF="config/qbittorrent/qBittorrent/qBittorrent.conf"
+if [[ -f "$QBT_CONF" ]]; then
+  printf '%s' "$qbt_pw" | ./scripts/set-qbt-password "$QBT_CONF"
+  log_ok "$QBT_CONF" "PBKDF2 hash written"
+else
+  log_warn "$QBT_CONF not present — skipping password injection"
+fi
+
+# --- Phase 6: patch Prowlarr DB ---
+log_phase "patching prowlarr.db → qbittorrent@${lan_ip}:8080"
+if [[ -f config/prowlarr/prowlarr.db ]]; then
+  printf '%s' "$qbt_pw" | ./scripts/patch-prowlarr-db config/prowlarr/prowlarr.db "$lan_ip" 8080 -
+  log_ok "prowlarr.db" "download-client host = $lan_ip, password synced"
+else
+  log_warn "config/prowlarr/prowlarr.db not present — skipping patch"
+fi
+
+# --- Phase 7: /mnt/videos sanity check ---
+log_phase "mount check"
+if [[ ! -d /mnt/videos/Videos ]]; then
+  die "/mnt/videos/Videos not present — mount your media drive first"
+fi
+log_ok "/mnt/videos" "mounted"
+
+# --- Phase 8: systemd user service ---
+log_phase "systemd user service"
+STACK_DIR="$(pwd)"
+SERVICE_DIR="$HOME/.config/systemd/user"
+mkdir -p "$SERVICE_DIR"
+sed "s|/path/to/media-centarr/prowlarr-stack|$STACK_DIR|g" \
+  defaults/prowlarr-stack.service > "$SERVICE_DIR/prowlarr-stack.service"
+systemctl --user daemon-reload
+systemctl --user enable prowlarr-stack.service >/dev/null
+log_ok "prowlarr-stack.service" "installed and enabled"
+
+# --- Phase 9: start stack ---
+log_phase "starting stack"
+docker compose up -d
+log_ok "containers" "started"
+
+# --- Phase 10: wait for tunnel ---
+log_phase "waiting for gluetun tunnel (up to 60s)"
+if wait_for_gluetun_healthy 60; then
+  log_ok "gluetun" "healthy"
+else
+  log_fail "gluetun" "did not reach healthy state in 60s"
+  log_info "last 20 lines of gluetun log:"
+  docker logs --tail 20 gluetun 2>&1 | sed 's/^/      /' >&2
+  die "aborting — VPN tunnel failed to establish"
+fi
+
+# --- Phase 11: verify ---
+verify_isolation || die "VPN isolation verification FAILED — see above and check docker logs gluetun"
+
+# --- Phase 12: credentials summary ---
+log_phase "credentials & endpoints"
+
+prowlarr_key=""
+if prowlarr_key=$(fetch_prowlarr_api_key); then
+  log_ok "Prowlarr API key" "from config/prowlarr/config.xml"
+else
+  log_warn "Prowlarr API key not readable from config/prowlarr/config.xml"
+fi
+
+echo ""
+echo ""
+echo "${COLOR_BOLD}${COLOR_GREEN}done.${COLOR_RESET}  record these for your media-centarr download-client config:"
+echo ""
+echo "  ${COLOR_BOLD}Prowlarr${COLOR_RESET}"
+echo "    URL       http://${lan_ip}:9696"
+if [[ -n "$prowlarr_key" ]]; then
+  echo "    API key   ${COLOR_YELLOW}${prowlarr_key}${COLOR_RESET}"
+else
+  echo "    API key   ${COLOR_DIM}(open the UI → Settings → General)${COLOR_RESET}"
+fi
+echo ""
+echo "  ${COLOR_BOLD}qBittorrent${COLOR_RESET}"
+echo "    URL       http://${lan_ip}:8080"
+echo "    Username  admin"
+echo "    Password  ${COLOR_YELLOW}${qbt_pw}${COLOR_RESET}   ${COLOR_DIM}(static — change in .env as QBITTORRENT_PASSWORD and re-run ./setup)${COLOR_RESET}"
+echo ""
+echo ""
+echo "verify isolation any time:   ${COLOR_CYAN}./check${COLOR_RESET}"
+echo "update stack:                ${COLOR_CYAN}./update${COLOR_RESET}"
+echo "stop:                        ${COLOR_CYAN}./scripts/stop${COLOR_RESET}"

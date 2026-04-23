@@ -1,0 +1,70 @@
+services:
+  gluetun:
+    image: qmcgaw/gluetun:v3.40.0
+    container_name: gluetun
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER}
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES:-}
+      - WIREGUARD_PRESHARED_KEY=${WIREGUARD_PRESHARED_KEY:-}
+      - SERVER_COUNTRIES=${SERVER_COUNTRIES}
+      - FIREWALL_OUTBOUND_SUBNETS=${LAN_SUBNET}
+      - TZ=Europe/Amsterdam
+    ports:
+      - "9696:9696"   # prowlarr (netns-shared)
+      - "8191:8191"   # flaresolverr (netns-shared)
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "--timeout=10", "https://api.ipify.org"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    restart: "no"
+
+  prowlarr:
+    image: linuxserver/prowlarr:2.3.5.5327-ls142
+    container_name: prowlarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Amsterdam
+    volumes:
+      - ./config/prowlarr:/config
+    restart: "no"
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:v3.4.6
+    container_name: flaresolverr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - TZ=Europe/Amsterdam
+    restart: "no"
+
+  qbittorrent:
+    image: linuxserver/qbittorrent:5.1.4-r3-ls451
+    container_name: qbittorrent
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Amsterdam
+      - WEBUI_PORT=8080
+    ports:
+      - "8080:8080"
+      - "6881:6881"
+      - "6881:6881/udp"
+    volumes:
+      - ./config/qbittorrent:/config
+      - /mnt/videos/downloads:/downloads
+      - /mnt/videos/Videos:/downloads/completed
+    restart: "no"

@@ -1,0 +1,723 @@
+#!/usr/bin/env bash
+# Shared library for prowlarr-stack bash scripts.
+# Source with: source "$(dirname "$0")/scripts/lib/common"
+# This file is a library; it MUST NOT be executed directly.
+
+# Guard against direct execution.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  echo "scripts/lib/common is a library; source it instead of executing." >&2
+  exit 1
+fi
+
+# --- Validators ---
+
+# --- VPN providers ---
+
+# Provider metadata: needs_addresses|needs_preshared|one-line key-source hint.
+# Keys are gluetun's VPN_SERVICE_PROVIDER slugs. Unknown slugs are still accepted
+# by validate_vpn_provider (gluetun will reject at runtime if truly wrong); the
+# registry just drives which prompts and hints we show.
+# See https://github.com/qdm12/gluetun-wiki/tree/main/setup/providers.
+declare -A VPN_PROVIDERS=(
+  [nordvpn]="0|0|Extract via the NordVPN Linux CLI. See README for the one-time ritual."
+  [protonvpn]="0|0|Download the WireGuard config from account.protonvpn.com → Downloads."
+  [mullvad]="1|0|Generate a WireGuard config at mullvad.net/en/account/wireguard."
+  [surfshark]="1|0|my.surfshark.com → VPN → Manual setup → WireGuard."
+  [ivpn]="1|0|ivpn.net → Account → WireGuard key generation."
+  [airvpn]="1|1|airvpn.org → Client Area → Config Generator (includes preshared key)."
+  [windscribe]="1|1|windscribe.com → My Account → Config Generators → WireGuard (includes preshared key)."
+)
+
+# provider_needs_addresses <slug> — returns 0 (yes) / 1 (no).
+# Unknown providers default to "yes, prompt — but accept blank" so we don't
+# silently skip a var they may need.
+provider_needs_addresses() {
+  local meta="${VPN_PROVIDERS[$1]:-}"
+  if [[ -z "$meta" ]]; then
+    return 0  # unknown → prompt optionally
+  fi
+  [[ "$(echo "$meta" | cut -d'|' -f1)" == "1" ]]
+}
+
+# provider_needs_preshared <slug> — same pattern.
+provider_needs_preshared() {
+  local meta="${VPN_PROVIDERS[$1]:-}"
+  if [[ -z "$meta" ]]; then
+    return 0  # unknown → prompt optionally
+  fi
+  [[ "$(echo "$meta" | cut -d'|' -f2)" == "1" ]]
+}
+
+# provider_key_hint <slug> — echoes the hint, or a generic fallback for unknown.
+provider_key_hint() {
+  local meta="${VPN_PROVIDERS[$1]:-}"
+  if [[ -n "$meta" ]]; then
+    echo "$meta" | cut -d'|' -f3
+  else
+    echo "See https://github.com/qdm12/gluetun-wiki/tree/main/setup/providers for your provider's key format."
+  fi
+}
+
+# validate_vpn_provider <slug>
+# Accepts any lowercase-alpha slug (gluetun has its own authoritative list and
+# will fail loudly at runtime if the slug is unknown). We reject empty/malformed
+# here and trust gluetun to reject genuinely-unknown slugs.
+validate_vpn_provider() {
+  local slug="${1:-}"
+  if [[ -z "$slug" ]]; then
+    echo "error: VPN provider is empty" >&2
+    return 1
+  fi
+  if ! [[ "$slug" =~ ^[a-z][a-z0-9_-]*$ ]]; then
+    echo "error: '$slug' is not a valid provider slug (lowercase alphanumeric, _ and - allowed)" >&2
+    return 1
+  fi
+  return 0
+}
+
+# --- Validators ---
+
+# validate_wg_key <key>
+# WireGuard private keys are 44-char base64 (universal across all providers).
+validate_wg_key() {
+  local key="${1:-}"
+  if [[ -z "$key" ]]; then
+    echo "error: WireGuard key is empty" >&2
+    return 1
+  fi
+  if [[ ${#key} -ne 44 ]]; then
+    echo "error: expected 44-char base64 WireGuard key; got ${#key} chars" >&2
+    return 1
+  fi
+  if ! [[ "$key" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+    echo "error: WireGuard key contains non-base64 characters" >&2
+    return 1
+  fi
+  return 0
+}
+
+# validate_ipv4 <addr>
+validate_ipv4() {
+  local addr="${1:-}"
+  if [[ -z "$addr" ]]; then
+    echo "error: IP address is empty" >&2
+    return 1
+  fi
+  if ! [[ "$addr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    echo "error: '$addr' is not a valid IPv4 address" >&2
+    return 1
+  fi
+  local IFS=.
+  # shellcheck disable=SC2206
+  local octets=($addr)
+  for octet in "${octets[@]}"; do
+    if (( octet > 255 )); then
+      echo "error: '$addr' has octet > 255" >&2
+      return 1
+    fi
+  done
+  return 0
+}
+
+# validate_cidr <cidr>
+validate_cidr() {
+  local cidr="${1:-}"
+  if ! [[ "$cidr" =~ ^([0-9]{1,3}(\.[0-9]{1,3}){3})/([0-9]{1,2})$ ]]; then
+    echo "error: '$cidr' is not a valid CIDR (expected x.x.x.x/NN)" >&2
+    return 1
+  fi
+  local addr="${BASH_REMATCH[1]}"
+  local prefix="${BASH_REMATCH[3]}"
+  if ! validate_ipv4 "$addr" 2>/dev/null; then
+    echo "error: '$cidr' has invalid network address '$addr'" >&2
+    return 1
+  fi
+  if (( prefix > 32 )); then
+    echo "error: '$cidr' has prefix > 32" >&2
+    return 1
+  fi
+  return 0
+}
+
+# detect_host_lan_ip [ip_route_output]
+# Parses `ip route get 1.1.1.1` output and echoes the src IP.
+# If no argument is provided, runs `ip route get 1.1.1.1` itself.
+# Echoes the IP on success; returns non-zero if no src field is found.
+detect_host_lan_ip() {
+  local output="${1:-}"
+  if [[ -z "$output" ]]; then
+    output=$(ip route get 1.1.1.1 2>/dev/null) || return 1
+  fi
+  local ip
+  ip=$(echo "$output" | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}')
+  if [[ -z "$ip" ]]; then
+    return 1
+  fi
+  if ! validate_ipv4 "$ip" 2>/dev/null; then
+    return 1
+  fi
+  echo "$ip"
+}
+
+# detect_lan_subnet <host_ip> [ip_addr_show_output]
+# Finds the CIDR of the interface owning host_ip and returns its network address.
+# E.g. host 192.168.1.10 on interface with 192.168.1.10/24 → 192.168.1.0/24.
+detect_lan_subnet() {
+  local host_ip="${1:-}"
+  local output="${2:-}"
+  if [[ -z "$host_ip" ]]; then
+    echo "error: detect_lan_subnet requires a host IP" >&2
+    return 1
+  fi
+  if [[ -z "$output" ]]; then
+    output=$(ip -o -f inet addr show 2>/dev/null) || return 1
+  fi
+  # Find the line where inet matches host_ip exactly.
+  local cidr
+  cidr=$(echo "$output" | awk -v ip="$host_ip" '
+    { for (i=1; i<=NF; i++) if ($i == "inet") { split($(i+1), a, "/"); if (a[1] == ip) { print $(i+1); exit } } }
+  ')
+  if [[ -z "$cidr" ]]; then
+    return 1
+  fi
+  # Convert host CIDR (e.g., 192.168.1.10/24) to network CIDR (192.168.1.0/24).
+  local IFS=/
+  # shellcheck disable=SC2206
+  local parts=($cidr)
+  local addr="${parts[0]}"
+  local prefix="${parts[1]}"
+  # Compute network address by zeroing host bits.
+  IFS=.
+  # shellcheck disable=SC2206
+  local octets=($addr)
+  local mask_bits=$prefix
+  for i in 0 1 2 3; do
+    if (( mask_bits >= 8 )); then
+      mask_bits=$((mask_bits - 8))
+    elif (( mask_bits > 0 )); then
+      local keep=$(( (0xff << (8 - mask_bits)) & 0xff ))
+      octets[i]=$(( octets[i] & keep ))
+      mask_bits=0
+    else
+      octets[i]=0
+    fi
+  done
+  echo "${octets[0]}.${octets[1]}.${octets[2]}.${octets[3]}/$prefix"
+}
+
+# --- Output / logging ---
+
+# Detect TTY + NO_COLOR at source time and cache.
+# COLOR_* are read by external sourcers (setup, install, etc.) — shellcheck
+# can't see those references when checking this file in isolation.
+# shellcheck disable=SC2034
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  COLOR_RESET=$'\033[0m'
+  COLOR_BOLD=$'\033[1m'
+  COLOR_DIM=$'\033[2m'
+  COLOR_RED=$'\033[31m'
+  COLOR_GREEN=$'\033[32m'
+  COLOR_YELLOW=$'\033[33m'
+  COLOR_BLUE=$'\033[34m'
+  COLOR_CYAN=$'\033[36m'
+else
+  COLOR_RESET="" COLOR_BOLD="" COLOR_DIM=""
+  COLOR_RED="" COLOR_GREEN="" COLOR_YELLOW=""
+  COLOR_BLUE="" COLOR_CYAN=""
+fi
+
+# log_phase <title> — prints a bold heading for a phase of setup/update.
+log_phase() {
+  echo ""
+  echo "${COLOR_BOLD}${COLOR_BLUE}▸ $1${COLOR_RESET}"
+}
+
+# log_ok <label> [detail]
+log_ok() {
+  printf "  %s%s%s  %s" "$COLOR_GREEN" "✓" "$COLOR_RESET" "$1"
+  if [[ -n "${2:-}" ]]; then
+    printf "  %s%s%s" "$COLOR_DIM" "$2" "$COLOR_RESET"
+  fi
+  echo
+}
+
+# log_fail <label> [detail]
+log_fail() {
+  printf "  %s%s%s  %s" "$COLOR_RED" "✗" "$COLOR_RESET" "$1"
+  if [[ -n "${2:-}" ]]; then
+    printf "  %s%s%s" "$COLOR_DIM" "$2" "$COLOR_RESET"
+  fi
+  echo
+}
+
+# log_info <message>
+log_info() {
+  echo "  ${COLOR_DIM}$1${COLOR_RESET}"
+}
+
+# log_warn <message>
+# Writes to stderr so it's safe inside $(...) capturing subshells (e.g., prompts).
+log_warn() {
+  echo "  ${COLOR_YELLOW}! $1${COLOR_RESET}" >&2
+}
+
+# die <message> [exit_code]
+# Prints a red error to stderr and exits. Default exit code 1.
+die() {
+  echo "${COLOR_RED}${COLOR_BOLD}error:${COLOR_RESET} $1" >&2
+  exit "${2:-1}"
+}
+
+# --- Prerequisite checks ---
+# Each check_* function prints a ✓/✗ line and returns 0/1.
+
+check_docker() {
+  if command -v docker >/dev/null 2>&1; then
+    local ver
+    ver=$(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',')
+    log_ok "docker" "${ver:-present}"
+    return 0
+  fi
+  log_fail "docker" "not installed — https://docs.docker.com/engine/install/"
+  return 1
+}
+
+check_docker_compose() {
+  if docker compose version >/dev/null 2>&1; then
+    local ver
+    ver=$(docker compose version --short 2>/dev/null)
+    log_ok "docker compose" "${ver:-plugin}"
+    return 0
+  fi
+  log_fail "docker compose" "plugin missing — pacman -S docker-compose | apt install docker-compose-plugin"
+  return 1
+}
+
+check_sqlite3() {
+  if command -v sqlite3 >/dev/null 2>&1; then
+    local ver
+    ver=$(sqlite3 --version | awk '{print $1}')
+    log_ok "sqlite3" "${ver:-present}"
+    return 0
+  fi
+  log_fail "sqlite3" "not installed — pacman -S sqlite | apt install sqlite3"
+  return 1
+}
+
+check_python3() {
+  if command -v python3 >/dev/null 2>&1; then
+    local ver
+    ver=$(python3 --version 2>&1 | awk '{print $2}')
+    log_ok "python3" "${ver:-present}"
+    return 0
+  fi
+  log_fail "python3" "not installed — pacman -S python | apt install python3"
+  return 1
+}
+
+check_ip_command() {
+  if command -v ip >/dev/null 2>&1; then
+    log_ok "ip" "iproute2"
+    return 0
+  fi
+  log_fail "ip" "not installed — pacman -S iproute2 | apt install iproute2"
+  return 1
+}
+
+# shellcheck disable=SC2120  # $1 is intentionally optional with default
+check_mount() {
+  local path="${1:-/mnt/videos/Videos}"
+  if [[ -d "$path" ]]; then
+    log_ok "$path" "present"
+    return 0
+  fi
+  log_fail "$path" "not a directory — mount your media drive first"
+  return 1
+}
+
+# run_prereqs — runs all prereq checks and returns non-zero if any failed.
+run_prereqs() {
+  local all_ok=0
+  check_docker || all_ok=1
+  check_docker_compose || all_ok=1
+  check_sqlite3 || all_ok=1
+  check_python3 || all_ok=1
+  check_ip_command || all_ok=1
+  check_mount || all_ok=1
+  return $all_ok
+}
+
+# --- .env I/O ---
+
+# read_env_value <file> <key>
+# Echoes the value for <key> from <file>, or empty string if absent.
+# Handles optionally-quoted values.
+read_env_value() {
+  local file="$1" key="$2"
+  [[ -f "$file" ]] || return 0
+  local line
+  line=$(grep -E "^${key}=" "$file" | tail -n 1) || return 0
+  line="${line#${key}=}"
+  # Strip surrounding double quotes if present.
+  if [[ "$line" =~ ^\"(.*)\"$ ]]; then
+    line="${BASH_REMATCH[1]}"
+  fi
+  echo "$line"
+}
+
+# write_env_value <file> <key> <value>
+# Updates <key> in <file> atomically. Creates <file> if absent.
+# Sets permissions to 600. Quotes values containing spaces.
+write_env_value() {
+  local file="$1" key="$2" value="$3"
+  local tmp="${file}.tmp.$$"
+  # Clean up tmp file if chmod or mv fails partway through.
+  trap 'rm -f "$tmp"' RETURN
+
+  # Quote value if it contains spaces or special chars.
+  local formatted
+  if [[ "$value" =~ [[:space:]\"\'\\\$] || -z "$value" ]]; then
+    # Escape embedded quotes, then wrap.
+    local escaped="${value//\"/\\\"}"
+    formatted="\"$escaped\""
+  else
+    formatted="$value"
+  fi
+
+  if [[ -f "$file" ]] && grep -qE "^${key}=" "$file"; then
+    # Key exists — replace in place.
+    awk -v key="$key" -v val="$formatted" \
+      'BEGIN{re="^"key"="} $0 ~ re {print key"="val; next} {print}' \
+      "$file" > "$tmp"
+  else
+    # Key new — append.
+    if [[ -f "$file" ]]; then
+      cp "$file" "$tmp"
+    else
+      : > "$tmp"
+    fi
+    echo "${key}=${formatted}" >> "$tmp"
+  fi
+  chmod 600 "$tmp"
+  mv "$tmp" "$file"
+}
+
+# --- Interactive prompts ---
+
+# prompt_with_default <label> <default> [validator_fn]
+# Reads a line from stdin, echoing <default> if blank.
+# If validator_fn is given, re-prompts until validation passes (or stdin closes).
+# Echoes the accepted value on stdout. Prompt goes to stderr so stdout stays clean.
+prompt_with_default() {
+  local label="$1" default="${2:-}" validator="${3:-}"
+  local input
+  while true; do
+    if [[ -n "$default" ]]; then
+      printf "  %s [%s%s%s]: " "$label" "$COLOR_DIM" "$default" "$COLOR_RESET" >&2
+    else
+      printf "  %s: " "$label" >&2
+    fi
+    IFS= read -r input || return 1
+    input="${input:-$default}"
+    if [[ -z "$input" ]]; then
+      log_warn "value required"
+      continue
+    fi
+    if [[ -n "$validator" ]]; then
+      if ! "$validator" "$input" 2>/dev/null; then
+        log_warn "invalid — try again"
+        continue
+      fi
+    fi
+    echo "$input"
+    return 0
+  done
+}
+
+# prompt_secret <label> [validator_fn]
+# Like prompt_with_default, but no echo and no default (secrets must be re-entered).
+prompt_secret() {
+  local label="$1" validator="${2:-}"
+  local input
+  while true; do
+    printf "  %s: " "$label" >&2
+    IFS= read -rs input || return 1
+    echo >&2  # newline after hidden input
+    if [[ -z "$input" ]]; then
+      log_warn "value required"
+      continue
+    fi
+    if [[ -n "$validator" ]]; then
+      if ! "$validator" "$input" 2>/dev/null; then
+        log_warn "invalid — try again"
+        continue
+      fi
+    fi
+    echo "$input"
+    return 0
+  done
+}
+
+# prompt_yes_no <label> <default:y|n>
+# Returns 0 for yes, 1 for no.
+prompt_yes_no() {
+  local label="$1" default="${2:-y}"
+  local hint="[Y/n]"
+  [[ "$default" == "n" ]] && hint="[y/N]"
+  local input
+  while true; do
+    printf "  %s %s: " "$label" "$hint" >&2
+    IFS= read -r input || return 1
+    input="${input:-$default}"
+    case "${input,,}" in
+      y|yes) return 0 ;;
+      n|no) return 1 ;;
+      *) log_warn "please answer y or n" ;;
+    esac
+  done
+}
+
+# --- Verification ---
+
+# fetch_container_external_ip <container_name>
+# Echoes the external IP as seen from inside <container_name>, via https://api.ipify.org.
+# Returns non-zero on any failure (container not running, network dead, etc.).
+fetch_container_external_ip() {
+  local container="$1"
+  local ip
+  ip=$(docker exec "$container" wget -qO- --timeout=10 https://api.ipify.org 2>/dev/null) || return 1
+  if ! validate_ipv4 "$ip" 2>/dev/null; then
+    return 1
+  fi
+  echo "$ip"
+}
+
+# verify_isolation
+# Returns 0 if prowlarr's external IP differs from qbittorrent's (→ VPN isolating traffic).
+# Returns 1 if they match (leak) or either fetch fails.
+# Prints a labeled report.
+verify_isolation() {
+  local prowlarr_ip qbt_ip
+  log_phase "verification"
+
+  if ! prowlarr_ip=$(fetch_container_external_ip prowlarr); then
+    log_fail "prowlarr external IP" "unreachable — gluetun tunnel down?"
+    log_info "check: docker logs gluetun"
+    return 1
+  fi
+  log_ok "prowlarr external IP" "$prowlarr_ip"
+
+  if ! qbt_ip=$(fetch_container_external_ip qbittorrent); then
+    log_fail "qbittorrent external IP" "unreachable — container not running?"
+    return 1
+  fi
+  log_ok "qbittorrent external IP" "$qbt_ip"
+
+  if [[ "$prowlarr_ip" == "$qbt_ip" ]]; then
+    log_fail "isolation" "FAIL — same IP on both; tunnel not isolating traffic"
+    log_info "last 20 lines of gluetun log:"
+    docker logs --tail 20 gluetun 2>&1 | sed 's/^/      /' >&2
+    return 1
+  fi
+
+  log_ok "isolation" "verified ($prowlarr_ip ≠ $qbt_ip)"
+  return 0
+}
+
+# fetch_prowlarr_api_key [config_path]
+# Extracts <ApiKey>...</ApiKey> from prowlarr's config.xml.
+fetch_prowlarr_api_key() {
+  local path="${1:-config/prowlarr/config.xml}"
+  [[ -f "$path" ]] || return 1
+  local key
+  key=$(grep -oE '<ApiKey>[a-f0-9]+</ApiKey>' "$path" | head -n 1 | sed 's|</\?ApiKey>||g')
+  if [[ -z "$key" ]]; then
+    return 1
+  fi
+  echo "$key"
+}
+
+# wait_for_gluetun_healthy [timeout_seconds]
+# Polls gluetun's docker healthcheck until status=healthy, or times out.
+wait_for_gluetun_healthy() {
+  local timeout="${1:-60}"
+  local elapsed=0
+  while (( elapsed < timeout )); do
+    local status
+    status=$(docker inspect --format '{{.State.Health.Status}}' gluetun 2>/dev/null || echo "missing")
+    case "$status" in
+      healthy) return 0 ;;
+      missing) sleep 1; elapsed=$((elapsed + 1)); continue ;;
+      starting|unhealthy|"") sleep 2; elapsed=$((elapsed + 2)) ;;
+      *) sleep 2; elapsed=$((elapsed + 2)) ;;
+    esac
+  done
+  return 1
+}
+
+# --- MANIFEST ---
+
+# write_manifest <install_dir> <version>
+# Writes a plain-text inventory of what this install owns to <install_dir>/MANIFEST.
+# Called by ./install (first install) and ./update (after upgrade).
+write_manifest() {
+  local dir="${1:-}"
+  local version="${2:-}"
+  if [[ -z "$dir" || -z "$version" ]]; then
+    echo "error: write_manifest requires <install_dir> and <version>" >&2
+    return 1
+  fi
+  if [[ ! -d "$dir" ]]; then
+    echo "error: install dir does not exist: $dir" >&2
+    return 1
+  fi
+
+  local manifest="$dir/MANIFEST"
+  local now user
+  now=$(date '+%Y-%m-%d %H:%M:%S %z')
+  user=$(id -un)
+
+  {
+    echo "prowlarr-stack $version"
+    echo "installed:    $now"
+    echo "install dir:  $dir"
+    echo "user:         $user"
+    echo ""
+    echo "# Files owned by this install (paths relative to install dir unless absolute)"
+    echo "file:   .env                                    mode:600  role:secrets"
+    echo "file:   .version                                mode:644  role:version pin"
+    echo "file:   MANIFEST                                mode:644  role:self"
+    echo "dir:    config/                                 mode:755  role:runtime state"
+    echo "file:   config/prowlarr/config.xml              mode:600  role:prowlarr config"
+    echo "file:   config/prowlarr/prowlarr.db             mode:600  role:prowlarr state (API keys)"
+    echo "file:   config/qbittorrent/qBittorrent/qBittorrent.conf  mode:600  role:qbt config"
+    echo "file:   config/qbittorrent/qBittorrent/categories.json   mode:644  role:qbt categories"
+    echo ""
+    echo "# System artifacts"
+    echo "systemd-unit:  $HOME/.config/systemd/user/prowlarr-stack.service"
+    echo ""
+    echo "# Docker images pulled at install time (pinned versions)"
+    local img
+    while IFS= read -r img; do
+      echo "image:  $img"
+    done < <(_manifest_compose_images "$dir/docker-compose.yml")
+    echo ""
+    echo "# Container names created by this stack"
+    echo "container:  gluetun"
+    echo "container:  prowlarr"
+    echo "container:  flaresolverr"
+    echo "container:  qbittorrent"
+    echo ""
+    echo "# Docker networks"
+    echo "network:  $(basename "$dir")_default"
+    echo ""
+    echo "# External paths referenced (NOT owned; your data; uninstall leaves them unless --purge-data)"
+    echo "external:  /mnt/videos/downloads/    role:active downloads"
+    echo "external:  /mnt/videos/Videos/       role:completed downloads"
+  } > "$manifest"
+  chmod 644 "$manifest"
+}
+
+# _manifest_compose_images <compose_path>
+# Internal: echo one image tag per line, parsed from `image:` lines in compose.
+_manifest_compose_images() {
+  local compose="$1"
+  [[ -f "$compose" ]] || return 0
+  awk '/^[[:space:]]*image:[[:space:]]*/ { sub(/^[[:space:]]*image:[[:space:]]*/, ""); sub(/[[:space:]].*$/, ""); print }' "$compose"
+}
+
+# parse_manifest_images <manifest_path>
+# Echoes one image tag per line.
+parse_manifest_images() {
+  local manifest="$1"
+  [[ -f "$manifest" ]] || return 1
+  awk '/^image:/ { $1 = ""; sub(/^[[:space:]]+/, ""); print }' "$manifest"
+}
+
+# parse_manifest_files <manifest_path>
+# Echoes one relative-path per line for entries declared as "file:".
+parse_manifest_files() {
+  local manifest="$1"
+  [[ -f "$manifest" ]] || return 1
+  awk '/^file:/ { print $2 }' "$manifest"
+}
+
+# parse_manifest_systemd_unit <manifest_path>
+# Echoes the systemd unit path (single line) or nothing if absent.
+parse_manifest_systemd_unit() {
+  local manifest="$1"
+  [[ -f "$manifest" ]] || return 1
+  awk '/^systemd-unit:/ { print $2 }' "$manifest"
+}
+
+# parse_manifest_version <manifest_path>
+parse_manifest_version() {
+  local manifest="$1"
+  [[ -f "$manifest" ]] || return 1
+  head -1 "$manifest" | awk '{print $2}'
+}
+
+# --- Release / version helpers ---
+
+# _strip_v <version> — echoes version without leading "v".
+_strip_v() {
+  local v="${1:-}"
+  echo "${v#v}"
+}
+
+# version_compare <a> <b> <op>
+# op ∈ {eq, lt, gt}. Returns 0 if the comparison holds, 1 otherwise.
+# Handles optional leading 'v'. Only supports X.Y.Z semver (no pre-release).
+version_compare() {
+  local a="${1:-}" b="${2:-}" op="${3:-}"
+  a=$(_strip_v "$a")
+  b=$(_strip_v "$b")
+  if ! [[ "$a" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$b" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "error: versions must be X.Y.Z (got '$1' and '$2')" >&2
+    return 1
+  fi
+  local IFS=.
+  # shellcheck disable=SC2206
+  local pa=($a) pb=($b)
+  local i cmp=0
+  for i in 0 1 2; do
+    if (( pa[i] < pb[i] )); then cmp=-1; break; fi
+    if (( pa[i] > pb[i] )); then cmp=1; break; fi
+  done
+  case "$op" in
+    eq) [[ $cmp -eq 0 ]] ;;
+    lt) [[ $cmp -lt 0 ]] ;;
+    gt) [[ $cmp -gt 0 ]] ;;
+    *)  echo "error: version_compare op must be eq|lt|gt" >&2; return 1 ;;
+  esac
+}
+
+# github_latest_release <owner/repo>
+# Echoes the latest release tag (e.g., "v1.2.3") to stdout.
+# Returns non-zero on network failure or unexpected response shape.
+# Retries 3× with exponential backoff.
+github_latest_release() {
+  local repo="${1:-}"
+  if [[ -z "$repo" ]]; then
+    echo "error: github_latest_release requires owner/repo" >&2
+    return 1
+  fi
+  local url="https://api.github.com/repos/$repo/releases/latest"
+  local delay=2 body=""
+  for _ in 1 2 3; do
+    body=$(curl -fsSL --max-time 10 "$url" 2>/dev/null) && break
+    sleep "$delay"
+    delay=$((delay * 2))
+  done
+  if [[ -z "${body:-}" ]]; then
+    echo "error: could not reach GitHub API after 3 attempts: $url" >&2
+    return 1
+  fi
+  local tag
+  tag=$(echo "$body" | awk -F'"' '/"tag_name":/ {print $4; exit}')
+  if [[ -z "$tag" ]]; then
+    echo "error: unexpected GitHub API response shape (no tag_name)" >&2
+    return 1
+  fi
+  echo "$tag"
+}

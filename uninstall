@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# prowlarr-stack uninstaller — reads MANIFEST and removes exactly what's listed.
+# Your downloaded media under /mnt/videos is preserved unless --purge-data.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+source scripts/lib/common
+
+YES=0
+PURGE_IMAGES=0
+PURGE_DATA=0
+YES_REALLY=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --yes) YES=1 ;;
+    --purge-images) PURGE_IMAGES=1 ;;
+    --purge-data) PURGE_DATA=1 ;;
+    --yes-really) YES_REALLY=1 ;;
+    -h|--help)
+      cat <<HELP
+Usage: ./uninstall [--yes] [--purge-images] [--purge-data --yes-really]
+
+  (no flags)        Remove the stack and its config/secrets. Keeps docker
+                    images (save bandwidth on reinstall) and your downloads.
+  --yes             Skip confirmation.
+  --purge-images    Also 'docker rmi' the pinned upstream images.
+  --purge-data      Also remove /mnt/videos/{downloads,Videos} contents.
+                    Requires --yes-really as a second guard.
+HELP
+      exit 0
+      ;;
+    *) die "unknown flag: $arg (try --help)" ;;
+  esac
+done
+
+if [[ $PURGE_DATA -eq 1 && $YES_REALLY -eq 0 ]]; then
+  die "--purge-data requires --yes-really (destroys your downloaded media)"
+fi
+
+INSTALL_DIR="$(pwd)"
+MANIFEST="$INSTALL_DIR/MANIFEST"
+
+HAVE_MANIFEST=1
+if [[ ! -f "$MANIFEST" ]]; then
+  HAVE_MANIFEST=0
+  log_warn "MANIFEST not found — falling back to best-effort removal."
+fi
+
+# --- plan ---
+log_phase "prowlarr-stack uninstaller"
+
+if [[ $HAVE_MANIFEST -eq 1 ]]; then
+  version=$(parse_manifest_version "$MANIFEST")
+  log_info "installed version:  ${version:-unknown}"
+fi
+log_info "install directory:  $INSTALL_DIR"
+
+echo ""
+echo "Will remove:"
+echo "  • containers: gluetun, prowlarr, flaresolverr, qbittorrent"
+echo "  • docker networks: $(basename "$INSTALL_DIR")_default"
+echo "  • systemd user unit: $HOME/.config/systemd/user/prowlarr-stack.service"
+echo "  • install dir: $INSTALL_DIR (includes .env with VPN credentials)"
+if [[ $PURGE_IMAGES -eq 1 ]]; then
+  echo "  • docker images (--purge-images):"
+  if [[ $HAVE_MANIFEST -eq 1 ]]; then
+    parse_manifest_images "$MANIFEST" | sed 's/^/      /'
+  else
+    echo "      (MANIFEST missing; will best-effort remove all prowlarr-stack images)"
+  fi
+fi
+if [[ $PURGE_DATA -eq 1 ]]; then
+  echo "  • media data (--purge-data):"
+  echo "      /mnt/videos/downloads/"
+  echo "      /mnt/videos/Videos/"
+fi
+echo ""
+echo "Will KEEP (unless flagged):"
+[[ $PURGE_IMAGES -eq 0 ]] && echo "  • docker images (saves bandwidth on reinstall — pass --purge-images)"
+[[ $PURGE_DATA -eq 0 ]] && echo "  • /mnt/videos/downloads/ + /mnt/videos/Videos/ (your media)"
+echo ""
+
+if [[ $YES -eq 0 ]]; then
+  if ! prompt_yes_no "Proceed with removal?" n; then
+    log_info "aborted"
+    exit 0
+  fi
+fi
+
+# --- execute ---
+
+log_phase "stopping stack"
+systemctl --user stop prowlarr-stack 2>/dev/null || log_warn "systemctl stop failed or service not running"
+log_ok "systemd" "stopped"
+
+systemctl --user disable prowlarr-stack 2>/dev/null || true
+UNIT_PATH="$HOME/.config/systemd/user/prowlarr-stack.service"
+if [[ -f "$UNIT_PATH" ]]; then
+  rm -f "$UNIT_PATH"
+  systemctl --user daemon-reload
+  log_ok "systemd unit" "removed"
+fi
+
+log_phase "removing containers + networks"
+docker compose down -v 2>/dev/null || log_warn "docker compose down failed — check: docker ps -a"
+log_ok "containers + named volumes" "removed"
+
+log_phase "removing .env"
+if [[ -f "$INSTALL_DIR/.env" ]]; then
+  if command -v shred >/dev/null 2>&1; then
+    shred -u "$INSTALL_DIR/.env"
+    log_ok ".env" "shredded"
+  else
+    rm -f "$INSTALL_DIR/.env"
+    log_warn ".env removed (but 'shred' not available — data may be recoverable from disk until overwritten)"
+  fi
+fi
+
+if [[ $PURGE_IMAGES -eq 1 ]]; then
+  log_phase "removing docker images"
+  if [[ $HAVE_MANIFEST -eq 1 ]]; then
+    while IFS= read -r img; do
+      [[ -z "$img" ]] && continue
+      if docker rmi "$img" 2>/dev/null; then
+        log_ok "$img" "removed"
+      else
+        log_warn "$img — skipped (may be in use or already gone)"
+      fi
+    done < <(parse_manifest_images "$MANIFEST")
+  else
+    for img in qmcgaw/gluetun linuxserver/prowlarr ghcr.io/flaresolverr/flaresolverr linuxserver/qbittorrent; do
+      docker images -q "$img" | xargs -r docker rmi 2>/dev/null || true
+    done
+    log_warn "best-effort image removal (MANIFEST was missing)"
+  fi
+fi
+
+if [[ $PURGE_DATA -eq 1 ]]; then
+  log_phase "removing media data"
+  for path in /mnt/videos/downloads /mnt/videos/Videos; do
+    if [[ -d "$path" ]]; then
+      # Remove contents but leave the directory in place (mount points).
+      find "$path" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      log_ok "$path" "contents removed"
+    fi
+  done
+fi
+
+log_phase "removing install dir"
+# cd out before rm-rf'ing the current dir.
+cd "$HOME"
+rm -rf "$INSTALL_DIR"
+log_ok "$INSTALL_DIR" "removed"
+
+echo ""
+echo "${COLOR_BOLD}${COLOR_GREEN}uninstall complete.${COLOR_RESET}"
+echo ""
+echo "Still on your system (intentionally):"
+[[ $PURGE_IMAGES -eq 0 ]] && echo "  • docker images (run with --purge-images next time if you want them gone)"
+[[ $PURGE_DATA -eq 0 ]] && echo "  • /mnt/videos/downloads/ + /mnt/videos/Videos/ (your media)"
+echo ""

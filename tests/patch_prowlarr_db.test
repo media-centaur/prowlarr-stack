@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -u
+
+SCRIPT="${SCRIPT:-scripts/patch-prowlarr-db}"
+FIXTURE="${FIXTURE:-tests/fixtures/prowlarr.db.seeded}"
+
+test_patcher_rewrites_host_and_port() {
+  local tmp; tmp=$(mktemp --suffix=.db)
+  cp "$FIXTURE" "$tmp"
+  "$SCRIPT" "$tmp" "192.168.1.10" "8080"
+  local settings
+  settings=$(sqlite3 "$tmp" "SELECT Settings FROM DownloadClients WHERE Implementation='QBittorrent' LIMIT 1;")
+  echo "$settings" | grep -q '"host":"192.168.1.10"'
+  echo "$settings" | grep -q '"port":8080'
+  rm -f "$tmp"
+}
+
+test_patcher_is_idempotent() {
+  local tmp; tmp=$(mktemp --suffix=.db)
+  cp "$FIXTURE" "$tmp"
+  "$SCRIPT" "$tmp" "192.168.1.10" "8080"
+  "$SCRIPT" "$tmp" "192.168.1.10" "8080"
+  local settings
+  settings=$(sqlite3 "$tmp" "SELECT Settings FROM DownloadClients WHERE Implementation='QBittorrent' LIMIT 1;")
+  echo "$settings" | grep -q '"host":"192.168.1.10"'
+  local count
+  count=$(sqlite3 "$tmp" "SELECT COUNT(*) FROM DownloadClients WHERE Implementation='QBittorrent';")
+  [[ "$count" == "1" ]]
+  rm -f "$tmp"
+}
+
+test_patcher_refuses_missing_db() {
+  ! "$SCRIPT" /nonexistent/path.db "192.168.1.10" "8080" 2>/dev/null
+}
+
+test_patcher_validates_host() {
+  local tmp; tmp=$(mktemp --suffix=.db)
+  cp "$FIXTURE" "$tmp"
+  ! "$SCRIPT" "$tmp" "not-an-ip" "8080" 2>/dev/null
+  rm -f "$tmp"
+}
+
+test_patcher_writes_password_when_provided() {
+  local tmp; tmp=$(mktemp --suffix=.db)
+  cp "$FIXTURE" "$tmp"
+  "$SCRIPT" "$tmp" "192.168.1.10" "8080" "hunter2"
+  local pw
+  pw=$(sqlite3 "$tmp" "SELECT json_extract(Settings, '\$.password') FROM DownloadClients WHERE Implementation='QBittorrent' LIMIT 1;")
+  [[ "$pw" == "hunter2" ]]
+  rm -f "$tmp"
+}
+
+test_patcher_reads_password_from_stdin_when_dash() {
+  local tmp; tmp=$(mktemp --suffix=.db)
+  cp "$FIXTURE" "$tmp"
+  printf 'stdin-pass' | "$SCRIPT" "$tmp" "192.168.1.10" "8080" -
+  local pw
+  pw=$(sqlite3 "$tmp" "SELECT json_extract(Settings, '\$.password') FROM DownloadClients WHERE Implementation='QBittorrent' LIMIT 1;")
+  [[ "$pw" == "stdin-pass" ]]
+  rm -f "$tmp"
+}
+
+test_patcher_handles_password_with_quotes() {
+  local tmp; tmp=$(mktemp --suffix=.db)
+  cp "$FIXTURE" "$tmp"
+  "$SCRIPT" "$tmp" "192.168.1.10" "8080" "it's-a-trap"
+  local pw
+  pw=$(sqlite3 "$tmp" "SELECT json_extract(Settings, '\$.password') FROM DownloadClients WHERE Implementation='QBittorrent' LIMIT 1;")
+  [[ "$pw" == "it's-a-trap" ]]
+  rm -f "$tmp"
+}
+
+test_patcher_leaves_password_alone_when_omitted() {
+  local tmp; tmp=$(mktemp --suffix=.db)
+  cp "$FIXTURE" "$tmp"
+  local before after
+  before=$(sqlite3 "$tmp" "SELECT json_extract(Settings, '\$.password') FROM DownloadClients WHERE Implementation='QBittorrent' LIMIT 1;")
+  "$SCRIPT" "$tmp" "192.168.1.10" "8080"
+  after=$(sqlite3 "$tmp" "SELECT json_extract(Settings, '\$.password') FROM DownloadClients WHERE Implementation='QBittorrent' LIMIT 1;")
+  [[ "$before" == "$after" ]]
+  rm -f "$tmp"
+}

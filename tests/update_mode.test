@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -u
+
+# shellcheck source=../scripts/lib/common
+source "./scripts/lib/common"
+
+test_version_compare_equal() {
+  version_compare "v1.2.3" "v1.2.3" eq
+}
+
+test_version_compare_lt() {
+  version_compare "v1.2.3" "v1.2.4" lt
+  version_compare "v1.2.3" "v1.3.0" lt
+  version_compare "v1.2.3" "v2.0.0" lt
+  version_compare "v0.9.0" "v0.10.0" lt
+}
+
+test_version_compare_gt() {
+  version_compare "v2.0.0" "v1.9.9" gt
+  version_compare "v1.2.4" "v1.2.3" gt
+}
+
+test_version_compare_handles_leading_v() {
+  version_compare "1.0.0" "v1.0.0" eq
+  version_compare "v1.0.0" "1.0.0" eq
+}
+
+test_version_compare_rejects_bad_format() {
+  ! version_compare "not-a-version" "v1.0.0" eq 2>/dev/null
+}
