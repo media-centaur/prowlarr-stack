@@ -151,6 +151,11 @@ info "handing off to tarball's ./install for interactive configuration..."
 cd "$DIR"
 if [ "$YES" -eq 1 ]; then
   exec ./install --non-interactive
+elif [ ! -t 0 ] && [ -e /dev/tty ]; then
+  # Invoked via `curl … | sh`: stdin is the curl pipe (now closed), which
+  # would EOF the first interactive prompt and exit. Reattach to the
+  # controlling terminal so prompts work.
+  exec ./install < /dev/tty
 else
   exec ./install
 fi
