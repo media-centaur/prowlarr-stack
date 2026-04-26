@@ -360,6 +360,9 @@ validate_storage_paths() {
   local dl="${1:-}" comp="${2:-}" allow="${3:-0}" mode="${4:-interactive}"
   local opt_in=0  # set if user accepts the interactive opt-in
   local path
+  # STORAGE_OPTIN is read by setup after this function returns; shellcheck
+  # can't see across the source boundary, so suppress the unused-var warning.
+  # shellcheck disable=SC2034
   STORAGE_OPTIN=0
 
   if [[ -z "$dl" || -z "$comp" ]]; then
@@ -408,6 +411,7 @@ validate_storage_paths() {
     fi
   done
 
+  # shellcheck disable=SC2034
   STORAGE_OPTIN=$opt_in
   return 0
 }
