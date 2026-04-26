@@ -9,6 +9,23 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.4.2] - 2026-04-26
+
+### Added
+- The bootstrap installer now prompts for the install directory when run
+  interactively (`curl … | sh`). Press Enter for the default
+  `$HOME/prowlarr-stack`, or type any other absolute path. Tilde
+  (`~/foo`) is expanded. The prompt appears AFTER the release version is
+  shown and BEFORE the existence check, so picking a different path
+  doesn't waste a download. The `--dir` flag and `PROWLARR_STACK_DIR`
+  env var still work as non-interactive overrides; `--yes` skips the
+  prompt.
+
+### Changed
+- The "$DIR already exists" error now suggests picking another path, in
+  addition to the existing `--force` and `update` hints, since
+  interactively choosing a different dir is now a first-class option.
+
 ## [0.4.1] - 2026-04-26
 
 ### Fixed
