@@ -54,7 +54,7 @@ fi
 DOWNLOADS_DIR_VAL=$(read_env_value "$INSTALL_DIR/.env" DOWNLOADS_DIR)
 COMPLETED_DIR_VAL=$(read_env_value "$INSTALL_DIR/.env" COMPLETED_DIR)
 [[ -n "$DOWNLOADS_DIR_VAL" ]] || DOWNLOADS_DIR_VAL=/mnt/videos/downloads
-[[ -n "$COMPLETED_DIR_VAL" ]] || COMPLETED_DIR_VAL=/mnt/videos/Videos
+[[ -n "$COMPLETED_DIR_VAL" ]] || COMPLETED_DIR_VAL=/mnt/videos/completed
 
 # --- plan ---
 log_phase "prowlarr-stack uninstaller"

@@ -350,12 +350,21 @@ run_prereqs() {
 #      - allow=0  → die (don't auto-mkdir into a path the user wants
 #                  mounted; that creates a phantom dir on the root fs
 #                  that masks future mount attempts)
-#   2. dir exists but isn't a mountpoint:
+#   2. dir exists but isn't on a dedicated mount (writes would land on /):
 #      - allow=1  → log_warn and proceed
 #      - interactive → prompt to opt into ALLOW_NON_MOUNTPOINT=1
 #      - non-interactive → die
-#   3. dir exists and IS a mountpoint:
+#   3. dir exists AND is on a dedicated mount (root fs is /, this path's
+#      containing mount is anything else):
 #      - log_ok and proceed
+#
+# Why "containing mount" instead of "is itself a mountpoint": the user's
+# `/mnt/videos` is the mount, but they're configuring `/mnt/videos/downloads`
+# (a subdirectory). Writes there land on the mounted filesystem, which is
+# what we actually care about. `mountpoint -q` would say "no, this exact
+# path isn't a mountpoint" and force a false opt-out. `findmnt --target`
+# walks up to the closest mountpoint that contains the path, which is the
+# question we actually want to answer.
 validate_storage_paths() {
   local dl="${1:-}" comp="${2:-}" allow="${3:-0}" mode="${4:-interactive}"
   local opt_in=0  # set if user accepts the interactive opt-in
@@ -382,32 +391,35 @@ validate_storage_paths() {
        (or set ALLOW_NON_MOUNTPOINT=1 in .env to use a plain directory; not recommended)"
     fi
 
-    # Step 2: mountpoint check.
-    if mountpoint -q "$path"; then
-      log_ok "$path" "mounted"
+    # Step 2: mount check — does this path live on a dedicated mount, or
+    # is it just a directory on the root fs?
+    local containing_mount
+    containing_mount=$(findmnt -no TARGET --target "$path" 2>/dev/null || echo "/")
+    if [[ "$containing_mount" != "/" ]]; then
+      log_ok "$path" "on $containing_mount"
       continue
     fi
 
-    # Not a mountpoint.
+    # Path is on the root fs.
     if [[ "$allow" == "1" || "$opt_in" == "1" ]]; then
-      log_warn "$path is not a mountpoint — proceeding (ALLOW_NON_MOUNTPOINT=1)"
+      log_warn "$path is on the root filesystem — proceeding (ALLOW_NON_MOUNTPOINT=1)"
       continue
     fi
 
     if [[ "$mode" == "non-interactive" ]]; then
-      die "$path is not a mountpoint — refusing to start.
-       set ALLOW_NON_MOUNTPOINT=1 in .env if you really want a plain directory."
+      die "$path is on the root filesystem (no dedicated mount) — refusing to start.
+       set ALLOW_NON_MOUNTPOINT=1 in .env if you really want to use the root fs."
     fi
 
     # Interactive: offer to opt in.
-    log_warn "$path exists but is not a kernel mountpoint."
+    log_warn "$path is on the root filesystem (no dedicated storage volume)."
     log_info "If you don't have a dedicated storage volume, you can use this directory as-is."
-    log_info "If you DO have one, abort here, mount it at $path, and re-run setup."
-    if prompt_yes_no "use $path as a plain directory and persist ALLOW_NON_MOUNTPOINT=1?" n; then
+    log_info "If you DO have one, abort here, mount it under $path, and re-run setup."
+    if prompt_yes_no "use $path on the root fs and persist ALLOW_NON_MOUNTPOINT=1?" n; then
       opt_in=1
       log_ok "$path" "accepted (will persist ALLOW_NON_MOUNTPOINT=1)"
     else
-      die "aborted — mount your storage at $path and re-run ./setup"
+      die "aborted — mount your storage so it covers $path, then re-run ./setup"
     fi
   done
 
@@ -707,7 +719,7 @@ write_manifest() {
     _ext_dl=$(read_env_value "$dir/.env" DOWNLOADS_DIR)
     _ext_comp=$(read_env_value "$dir/.env" COMPLETED_DIR)
     echo "external:  ${_ext_dl:-/mnt/videos/downloads}/    role:active downloads"
-    echo "external:  ${_ext_comp:-/mnt/videos/Videos}/       role:completed downloads"
+    echo "external:  ${_ext_comp:-/mnt/videos/completed}/    role:completed downloads"
   } > "$manifest"
   chmod 644 "$manifest"
 }

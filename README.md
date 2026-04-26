@@ -162,7 +162,7 @@ qBittorrent's host download paths are configured via two `.env` keys:
 - `DOWNLOADS_DIR` — bind-mounted to `/downloads` inside qBittorrent. In-flight torrents and the `incomplete/` subdir live here.
 - `COMPLETED_DIR` — bind-mounted to `/downloads/completed`. Completed downloads land here.
 
-Defaults: `/mnt/videos/downloads` and `/mnt/videos/Videos`. `./setup` prompts for both and verifies each path is a real kernel mountpoint via `mountpoint -q`. If the OS mount didn't come up, setup refuses to start the stack — that's the guard against silent writes to the root filesystem.
+Defaults: `/mnt/videos/downloads` and `/mnt/videos/completed`. `./setup` prompts for both and verifies each path lives on a dedicated mount (using `findmnt --target`, so subdirectories of a mount count — your `/mnt/videos` mount covers `/mnt/videos/downloads` etc.). If the path is on the root filesystem, setup refuses to start the stack — that's the guard against silent writes to the root fs.
 
 The generated systemd user unit also gets `RequiresMountsFor=…` for both paths, so a reboot won't start the stack until the underlying filesystems are mounted.
 

@@ -66,5 +66,5 @@ services:
     volumes:
       - ./config/qbittorrent:/config
       - ${DOWNLOADS_DIR:-/mnt/videos/downloads}:/downloads
-      - ${COMPLETED_DIR:-/mnt/videos/Videos}:/downloads/completed
+      - ${COMPLETED_DIR:-/mnt/videos/completed}:/downloads/completed
     restart: "no"

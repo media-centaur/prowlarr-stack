@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# Wait for the configured storage paths to be real kernel mountpoints
-# (not just directories on the root fs). Polls every 5 seconds for up to
-# 5 minutes per path. Reads paths from .env in the install dir.
+# Wait for the configured storage paths to live on a dedicated kernel mount
+# (i.e., the closest mountpoint containing them is anything other than `/`).
+# Polls every 5 seconds for up to 5 minutes per path. Reads paths from .env
+# in the install dir.
+#
+# Why "containing mount" instead of "is itself a mountpoint": the user's
+# DOWNLOADS_DIR may be a subdirectory of a mount (e.g. /mnt/videos/downloads
+# inside an /mnt/videos mount), in which case `mountpoint -q` would falsely
+# report "not mounted." `findmnt --target` resolves to the closest containing
+# mount, which is the question we actually care about.
 #
 # Run as ExecStartPre by the systemd user unit. CWD is the install dir
 # via WorkingDirectory=.
@@ -32,16 +39,17 @@ TIMEOUT=300
 INTERVAL=5
 
 wait_one() {
-  local path="$1" elapsed=0
+  local path="$1" elapsed=0 mp
   while (( elapsed < TIMEOUT )); do
-    if mountpoint -q "$path"; then
-      echo "wait-for-mount: $path mounted"
+    mp=$(findmnt -no TARGET --target "$path" 2>/dev/null || echo "/")
+    if [[ "$mp" != "/" ]]; then
+      echo "wait-for-mount: $path on $mp"
       return 0
     fi
     sleep "$INTERVAL"
     elapsed=$((elapsed + INTERVAL))
   done
-  echo "wait-for-mount: $path not mounted after ${TIMEOUT}s" >&2
+  echo "wait-for-mount: $path still on root fs after ${TIMEOUT}s" >&2
   return 1
 }
 

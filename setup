@@ -166,7 +166,7 @@ if [[ -z "$completed_dir" || $RECONFIGURE -eq 1 ]]; then
   if [[ $NONINTERACTIVE -eq 1 ]]; then
     [[ -n "$completed_dir" ]] || die "COMPLETED_DIR not set in .env and --non-interactive was passed"
   else
-    completed_dir=$(prompt_with_default "Completed dir (host path bind-mounted to /downloads/completed)" "${completed_dir:-/mnt/videos/Videos}")
+    completed_dir=$(prompt_with_default "Completed dir (host path bind-mounted to /downloads/completed)" "${completed_dir:-/mnt/videos/completed}")
   fi
 fi
 [[ "$downloads_dir" = /* ]] || die "DOWNLOADS_DIR must be an absolute path: $downloads_dir"
