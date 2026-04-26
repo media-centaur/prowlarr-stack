@@ -9,6 +9,20 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.2.2] - 2026-04-26
+
+### Fixed
+- Setup now force-recreates containers when starting the stack. A reinstall
+  workflow (`rm -rf ~/prowlarr-stack && curl … | sh` while the old stack
+  was still running) left the kernel holding the original — now-orphaned —
+  bind-mount inode for `config/prowlarr/`. The fresh `docker compose up -d`
+  was a no-op (same-named containers existed), so Prowlarr wrote its
+  generated API key into a phantom directory that no longer existed on
+  the host, and setup's post-install summary fell through to the "open the
+  UI" fallback. `docker compose up -d --force-recreate` replaces the
+  containers, re-resolving every bind mount against the current host
+  inode.
+
 ## [0.2.1] - 2026-04-26
 
 ### Fixed

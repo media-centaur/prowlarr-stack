@@ -242,8 +242,15 @@ log_ok "prowlarr-stack.service" "installed and enabled"
 
 # --- Phase 9: start stack ---
 log_phase "starting stack"
-docker compose up -d
-log_ok "containers" "started"
+# --force-recreate replaces any pre-existing same-named containers, so stale
+# bind mounts get re-resolved to the current host inode. This matters when a
+# user does `rm -rf ~/prowlarr-stack && reinstall` while the stack is up:
+# the kernel keeps the old (now-orphaned) inode attached to the running
+# container's mount, and a plain `docker compose up -d` is a no-op because
+# the container exists. Without --force-recreate, Prowlarr writes its API
+# key into a phantom directory that no longer exists on the host.
+docker compose up -d --force-recreate
+log_ok "containers" "started (recreated for fresh bind mounts)"
 
 # --- Phase 10: wait for tunnel ---
 log_phase "waiting for gluetun tunnel (up to 60s)"
