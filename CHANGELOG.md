@@ -9,6 +9,18 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.4.3] - 2026-04-26
+
+### Fixed
+- Re-tagged release of v0.4.2. The v0.4.2 tag was pushed but its release
+  workflow failed before publishing artifacts because two shellcheck
+  warnings landed in `install.sh` (a dead variable from a refactor I
+  forgot to remove, and a `'~/'` pattern that shellcheck flagged as a
+  misused-tilde). The dead variable is removed; the case patterns now
+  use backslash-escaped tildes (`\~`, `\~/*`), which are equivalent in
+  POSIX sh and don't trip SC2088. Functionally identical to the
+  intended v0.4.2.
+
 ## [0.4.2] - 2026-04-26
 
 ### Added
