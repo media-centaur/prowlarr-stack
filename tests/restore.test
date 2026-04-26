@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+set -u
+
+REPO_ROOT=$(pwd)
+
+# _make_fake_install <dir> [setup_marker_path]
+# Same shape as the helper in tests/backup.test but installs both backup AND
+# restore, plus a stub ./setup that writes a marker file when called (so
+# tests can assert restore actually invoked it).
+_make_fake_install() {
+  local dir="$1"
+  local marker="${2:-$dir/.setup-was-called}"
+  mkdir -p "$dir/scripts/lib" "$dir/config/prowlarr" "$dir/config/qbittorrent/qBittorrent"
+  cp "$REPO_ROOT/scripts/lib/common" "$dir/scripts/lib/common"
+  cp "$REPO_ROOT/backup" "$dir/backup"
+  cp "$REPO_ROOT/restore" "$dir/restore"
+  chmod +x "$dir/backup" "$dir/restore"
+  echo "services: {}" > "$dir/docker-compose.yml"
+  cat > "$dir/setup" <<EOF
+#!/usr/bin/env bash
+# Test stub: writes a marker so tests can assert restore called us with
+# the expected args, then exits 0. Real setup would re-detect LAN, re-patch
+# prowlarr.db, etc.
+echo "called with args: \$*" > "$marker"
+exit 0
+EOF
+  chmod +x "$dir/setup"
+  echo "v0.0.0-test" > "$dir/.version"
+  cat > "$dir/.env" <<'EOF'
+VPN_SERVICE_PROVIDER=nordvpn
+WIREGUARD_PRIVATE_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+HOST_LAN_IP=10.99.99.99
+LAN_SUBNET=10.99.99.0/24
+QBITTORRENT_PASSWORD=hunter2
+EOF
+  chmod 600 "$dir/.env"
+  echo "<Config></Config>" > "$dir/config/prowlarr/config.xml"
+  echo "current-prowlarr-db" > "$dir/config/prowlarr/prowlarr.db"
+  echo '[Preferences]' > "$dir/config/qbittorrent/qBittorrent/qBittorrent.conf"
+}
+
+# _make_happy_backup <out_path> [schema]
+# Builds a well-formed backup tarball with the given schema (default 1) and
+# distinct .env / config/ contents so restore tests can verify they replaced
+# the originals.
+_make_happy_backup() {
+  local out="$1"
+  local schema="${2:-1}"
+  local tmp; tmp=$(mktemp -d)
+  cat > "$tmp/.env" <<'EOF'
+VPN_SERVICE_PROVIDER=protonvpn
+WIREGUARD_PRIVATE_KEY=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
+HOST_LAN_IP=172.16.5.5
+LAN_SUBNET=172.16.5.0/24
+QBITTORRENT_PASSWORD=changeme
+EOF
+  chmod 600 "$tmp/.env"
+  mkdir -p "$tmp/config/prowlarr" "$tmp/config/qbittorrent/qBittorrent"
+  echo "from-backup-prowlarr-db" > "$tmp/config/prowlarr/prowlarr.db"
+  echo "<Config><FromBackup/></Config>" > "$tmp/config/prowlarr/config.xml"
+  echo "[Preferences]" > "$tmp/config/qbittorrent/qBittorrent/qBittorrent.conf"
+  cat > "$tmp/BACKUP-MANIFEST" <<EOF
+schema:        $schema
+created:       2026-04-26T12:00:00Z
+source-host:   testhost
+source-user:   testuser
+stack-version: v0.0.0-test
+EOF
+  tar -czf "$out" -C "$tmp" .env config BACKUP-MANIFEST
+  rm -rf "$tmp"
+}
+
+test_restore_rejects_missing_backup_file() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  ! ( cd "$tmp/install" && ./restore /nonexistent/backup.tar.gz --yes 2>/dev/null )
+  rm -rf "$tmp"
+}
+
+test_restore_rejects_tarball_with_absolute_paths() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  local stage; stage=$(mktemp -d)
+  echo "evil" > "$stage/.env"
+  echo "schema: 1" > "$stage/BACKUP-MANIFEST"
+  mkdir -p "$stage/config"
+  # Force absolute member names by transforming the prefix.
+  tar -czf "$tmp/evil.tar.gz" --transform 's|^|/abs/|' -C "$stage" .env config BACKUP-MANIFEST
+  ! ( cd "$tmp/install" && ./restore "$tmp/evil.tar.gz" --yes 2>/dev/null )
+  rm -rf "$tmp" "$stage"
+}
+
+test_restore_rejects_tarball_with_parent_refs() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  local stage; stage=$(mktemp -d)
+  echo "evil" > "$stage/.env"
+  echo "schema: 1" > "$stage/BACKUP-MANIFEST"
+  mkdir -p "$stage/config"
+  tar -czf "$tmp/evil.tar.gz" --transform 's|^|../escape/|' -C "$stage" .env config BACKUP-MANIFEST
+  ! ( cd "$tmp/install" && ./restore "$tmp/evil.tar.gz" --yes 2>/dev/null )
+  rm -rf "$tmp" "$stage"
+}
+
+test_restore_rejects_tarball_with_unexpected_entry() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  local stage; stage=$(mktemp -d)
+  echo "x" > "$stage/.env"
+  echo "schema: 1" > "$stage/BACKUP-MANIFEST"
+  mkdir -p "$stage/config"
+  echo "drive-by" > "$stage/random.txt"
+  tar -czf "$tmp/evil.tar.gz" -C "$stage" .env config BACKUP-MANIFEST random.txt
+  ! ( cd "$tmp/install" && ./restore "$tmp/evil.tar.gz" --yes 2>/dev/null )
+  rm -rf "$tmp" "$stage"
+}
+
+test_restore_rejects_tarball_missing_backup_manifest() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  local stage; stage=$(mktemp -d)
+  echo "x" > "$stage/.env"
+  mkdir -p "$stage/config"
+  tar -czf "$tmp/no-manifest.tar.gz" -C "$stage" .env config
+  ! ( cd "$tmp/install" && ./restore "$tmp/no-manifest.tar.gz" --yes 2>/dev/null )
+  rm -rf "$tmp" "$stage"
+}
+
+test_restore_rejects_unknown_schema() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  _make_happy_backup "$tmp/backup.tar.gz" 99
+  ! ( cd "$tmp/install" && ./restore "$tmp/backup.tar.gz" --yes 2>/dev/null )
+  rm -rf "$tmp"
+}
+
+test_restore_scrubs_lan_keys() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  _make_happy_backup "$tmp/backup.tar.gz"
+  ( cd "$tmp/install" && ./restore "$tmp/backup.tar.gz" --yes >/dev/null 2>&1 )
+  # After scrub, both keys should be present-but-empty (write_env_value with
+  # empty value produces KEY="" — read_env_value returns empty string).
+  source "$REPO_ROOT/scripts/lib/common"
+  local ip subnet
+  ip=$(read_env_value "$tmp/install/.env" HOST_LAN_IP)
+  subnet=$(read_env_value "$tmp/install/.env" LAN_SUBNET)
+  [[ -z "$ip" ]]
+  [[ -z "$subnet" ]]
+  rm -rf "$tmp"
+}
+
+test_restore_replaces_env_and_config_with_backup_contents() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  _make_happy_backup "$tmp/backup.tar.gz"
+  ( cd "$tmp/install" && ./restore "$tmp/backup.tar.gz" --yes >/dev/null 2>&1 )
+  # .env should now be the backup's (provider=protonvpn), not the install's (nordvpn).
+  source "$REPO_ROOT/scripts/lib/common"
+  local provider
+  provider=$(read_env_value "$tmp/install/.env" VPN_SERVICE_PROVIDER)
+  [[ "$provider" == "protonvpn" ]]
+  # config/prowlarr/prowlarr.db should now contain the backup's marker.
+  grep -q '^from-backup-prowlarr-db$' "$tmp/install/config/prowlarr/prowlarr.db"
+  rm -rf "$tmp"
+}
+
+test_restore_creates_pre_restore_snapshots() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  _make_happy_backup "$tmp/backup.tar.gz"
+  ( cd "$tmp/install" && ./restore "$tmp/backup.tar.gz" --yes >/dev/null 2>&1 )
+  # Both an .env.pre-restore-* and a config.pre-restore-*/ should exist.
+  ls "$tmp/install"/.env.pre-restore-* >/dev/null
+  ls -d "$tmp/install"/config.pre-restore-*/ >/dev/null
+  rm -rf "$tmp"
+}
+
+test_restore_invokes_setup_non_interactive() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install" "$tmp/install/.setup-was-called"
+  _make_happy_backup "$tmp/backup.tar.gz"
+  ( cd "$tmp/install" && ./restore "$tmp/backup.tar.gz" --yes >/dev/null 2>&1 )
+  [[ -f "$tmp/install/.setup-was-called" ]]
+  grep -q -- '--non-interactive' "$tmp/install/.setup-was-called"
+  rm -rf "$tmp"
+}
+
+test_restore_no_rollback_snapshot_removes_them() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  _make_happy_backup "$tmp/backup.tar.gz"
+  ( cd "$tmp/install" && ./restore "$tmp/backup.tar.gz" --yes --no-rollback-snapshot >/dev/null 2>&1 )
+  ! ls "$tmp/install"/.env.pre-restore-* >/dev/null 2>&1
+  ! ls -d "$tmp/install"/config.pre-restore-*/ >/dev/null 2>&1
+  rm -rf "$tmp"
+}

@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# Restore a prowlarr-stack install from a tarball produced by ./backup.
+#
+# Flow: validate tarball → snapshot existing .env/config → extract → scrub
+# machine-specific LAN keys → setup --non-interactive (re-detects LAN,
+# re-patches prowlarr.db with the new HOST_LAN_IP, re-hashes the qBT
+# password) → start stack → verify isolation.
+#
+# Usage:
+#   ./restore /path/to/prowlarr-stack-backup-*.tar.gz [--yes]
+#   ./restore /path/to/...tar.gz --no-rollback-snapshot  # don't keep pre-restore snapshots
+set -euo pipefail
+
+cd "$(dirname "$0")"
+# shellcheck source=scripts/lib/common
+source scripts/lib/common
+
+BACKUP_FILE=""
+YES=0
+KEEP_SNAPSHOT=1
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --yes) YES=1; shift ;;
+    --no-rollback-snapshot) KEEP_SNAPSHOT=0; shift ;;
+    -h|--help)
+      cat <<HELP
+Usage: ./restore <backup.tar.gz> [--yes] [--no-rollback-snapshot]
+
+  <backup.tar.gz>           tarball produced by ./backup
+  --yes                     skip confirmations
+  --no-rollback-snapshot    don't keep .env.pre-restore-* / config.pre-restore-*/
+                            (default: keep them so you can roll back manually)
+
+Restore is destructive: it replaces the current .env and config/ with the
+contents of the backup. The pre-restore snapshots let you reverse the
+restore by moving them back into place.
+HELP
+      exit 0
+      ;;
+    -*) die "unknown flag: $1 (try --help)" ;;
+    *)
+      if [[ -n "$BACKUP_FILE" ]]; then
+        die "extra positional arg: $1 (already have backup file: $BACKUP_FILE)"
+      fi
+      BACKUP_FILE="$1"; shift ;;
+  esac
+done
+
+[[ -n "$BACKUP_FILE" ]] || die "missing backup file argument (try --help)"
+[[ -f "$BACKUP_FILE" ]] || die "backup file not found: $BACKUP_FILE"
+[[ -r "$BACKUP_FILE" ]] || die "backup file not readable: $BACKUP_FILE"
+
+# Resolve to an absolute path before any cd shenanigans.
+BACKUP_FILE=$(readlink -f "$BACKUP_FILE")
+
+# --- Sanity: in an installed dir ---
+for required in docker-compose.yml setup scripts/lib/common; do
+  [[ -e "$required" ]] || die "./restore must run from a prowlarr-stack install dir (missing: $required)"
+done
+
+# --- Validate archive ---
+log_phase "validating tarball"
+
+# Same archive-safety walk install.sh does on a downloaded release tarball:
+# reject absolute paths, parent-refs, and unexpected top-level entries.
+bad=$(tar tzf "$BACKUP_FILE" | awk '
+  /^\// { print "absolute path: "$0; exit }
+  /\.\./ { print "parent-ref:    "$0; exit }
+  $0 !~ /^(\.env|\.envrc|config\/|BACKUP-MANIFEST)/ { print "unexpected entry: "$0; exit }
+  { next }
+')
+[[ -z "$bad" ]] || die "tarball rejected: $bad"
+
+# Required entries.
+listing=$(tar tzf "$BACKUP_FILE")
+echo "$listing" | grep -qx 'BACKUP-MANIFEST' || die "tarball missing BACKUP-MANIFEST — not a prowlarr-stack backup?"
+echo "$listing" | grep -qx '\.env' || die "tarball missing .env"
+echo "$listing" | grep -qE '^config/' || die "tarball missing config/ tree"
+log_ok "archive" "safe"
+
+# Schema check.
+TMPDIR_RESTORE=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_RESTORE"' EXIT INT TERM
+tar xzf "$BACKUP_FILE" -C "$TMPDIR_RESTORE"
+
+backup_schema=$(awk -F: '/^schema:/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "$TMPDIR_RESTORE/BACKUP-MANIFEST")
+if [[ "$backup_schema" != "1" ]]; then
+  die "unsupported BACKUP-MANIFEST schema: '$backup_schema' (this restore expects schema 1)"
+fi
+log_ok "schema" "1"
+
+backup_host=$(awk -F: '/^source-host:/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "$TMPDIR_RESTORE/BACKUP-MANIFEST" || echo "?")
+backup_created=$(awk -F: '/^created:/ {sub(/^created:[[:space:]]+/, ""); print; exit}' "$TMPDIR_RESTORE/BACKUP-MANIFEST" || echo "?")
+backup_stack_version=$(awk -F: '/^stack-version:/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "$TMPDIR_RESTORE/BACKUP-MANIFEST" || echo "?")
+
+# --- Plan summary + confirmation ---
+echo ""
+echo "${COLOR_BOLD}prowlarr-stack restore${COLOR_RESET}"
+log_info "backup file:    $BACKUP_FILE"
+log_info "backup created: $backup_created"
+log_info "source host:    $backup_host"
+log_info "source version: $backup_stack_version"
+log_info "target dir:     $(pwd)"
+log_warn "this replaces the current .env and config/ — pre-restore snapshots will be kept."
+
+if [[ $YES -eq 0 ]]; then
+  if ! prompt_yes_no "proceed?" y; then
+    log_info "aborted"
+    exit 0
+  fi
+fi
+
+# --- Stop stack ---
+STACK_WAS_RUNNING=0
+if systemctl --user is-active --quiet prowlarr-stack 2>/dev/null; then
+  STACK_WAS_RUNNING=1
+  log_phase "stopping stack"
+  systemctl --user stop prowlarr-stack
+  log_ok "prowlarr-stack" "stopped"
+fi
+
+# --- Snapshot existing state ---
+RESTORE_TS=$(date -u +%Y%m%dT%H%M%SZ)
+ENV_SNAPSHOT=".env.pre-restore-$RESTORE_TS"
+CONFIG_SNAPSHOT="config.pre-restore-$RESTORE_TS"
+
+if [[ -f .env || -d config ]]; then
+  log_phase "snapshotting existing state"
+  if [[ -f .env ]]; then
+    mv .env "$ENV_SNAPSHOT"
+    log_ok ".env" "→ $ENV_SNAPSHOT"
+  fi
+  if [[ -d config ]]; then
+    mv config "$CONFIG_SNAPSHOT"
+    log_ok "config/" "→ $CONFIG_SNAPSHOT/"
+  fi
+fi
+
+# --- Roll forward ---
+log_phase "extracting backup"
+cp -a "$TMPDIR_RESTORE/.env" .env
+chmod 600 .env
+log_ok ".env" "extracted"
+if [[ -f "$TMPDIR_RESTORE/.envrc" ]]; then
+  cp -a "$TMPDIR_RESTORE/.envrc" .envrc
+  log_ok ".envrc" "extracted"
+fi
+cp -a "$TMPDIR_RESTORE/config" .
+log_ok "config/" "extracted"
+
+# --- Scrub machine-specific LAN keys so setup re-detects them ---
+log_phase "rewriting machine-specific values"
+# write_env_value with empty value is treated by setup as absent, triggering
+# the auto-detect branch in setup.sh:119-149.
+write_env_value .env HOST_LAN_IP ""
+write_env_value .env LAN_SUBNET ""
+log_ok "HOST_LAN_IP / LAN_SUBNET" "cleared (will auto-detect on this machine)"
+
+# --- Re-run setup non-interactively ---
+log_phase "re-running setup"
+./setup --non-interactive
+
+# --- Refresh MANIFEST so it reflects this machine's state ---
+if [[ -f .version ]]; then
+  log_phase "refreshing MANIFEST"
+  write_manifest "$(pwd)" "$(cat .version)"
+  log_ok "MANIFEST" "refreshed"
+fi
+
+# --- Cleanup snapshots if the user opted out ---
+if [[ $KEEP_SNAPSHOT -eq 0 ]]; then
+  log_phase "removing pre-restore snapshots (--no-rollback-snapshot)"
+  [[ -f "$ENV_SNAPSHOT" ]] && rm -f "$ENV_SNAPSHOT"
+  [[ -d "$CONFIG_SNAPSHOT" ]] && rm -rf "$CONFIG_SNAPSHOT"
+  log_ok "snapshots" "removed"
+fi
+
+# --- Done ---
+echo ""
+echo "${COLOR_BOLD}${COLOR_GREEN}restore complete.${COLOR_RESET}"
+echo "  prowlarr:   http://localhost:9696"
+echo "  qbittorrent: http://localhost:8080"
+if [[ $KEEP_SNAPSHOT -eq 1 && ( -e "$ENV_SNAPSHOT" || -e "$CONFIG_SNAPSHOT" ) ]]; then
+  echo ""
+  echo "  ${COLOR_DIM}rollback (if needed):${COLOR_RESET}"
+  [[ -e "$ENV_SNAPSHOT" ]] && echo "    mv $ENV_SNAPSHOT .env"
+  [[ -e "$CONFIG_SNAPSHOT" ]] && echo "    rm -rf config && mv $CONFIG_SNAPSHOT config"
+  echo "    systemctl --user restart prowlarr-stack"
+fi
+
+# Note: STACK_WAS_RUNNING is informational — setup --non-interactive already
+# starts the stack via Phase 9 of setup, so we don't need to start it here.
+: "$STACK_WAS_RUNNING"

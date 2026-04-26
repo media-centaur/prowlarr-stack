@@ -9,6 +9,23 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.2.0] - 2026-04-26
+
+### Added
+- `./backup` — captures `.env` + `config/` into a portable tarball (mode 600,
+  default `$HOME/prowlarr-stack-backup-<host>-<UTC>.tar.gz`). Briefly stops the
+  stack to flush SQLite WAL; `--no-stop` skips. Refuses to write into directories
+  containing `.git/` or `.jj/` since the tarball contains your WireGuard private
+  key.
+- `./restore <tarball>` — restores `.env` + `config/` from a backup, snapshots
+  existing state to `.env.pre-restore-<UTC>` / `config.pre-restore-<UTC>/` for
+  rollback, scrubs `HOST_LAN_IP` and `LAN_SUBNET` (so the receiving machine's
+  values are auto-detected and re-patched into Prowlarr's download-client row),
+  re-runs `./setup --non-interactive`, re-verifies isolation.
+- `./install --restore PATH` and `install.sh --restore PATH` — clean-install
+  flow: `curl … | sh -s -- --restore /path/to/backup.tar.gz` reproduces a
+  configured stack on a fresh machine in one shot, no interactive prompts.
+
 ## [0.1.1] - 2026-04-26
 
 ### Fixed

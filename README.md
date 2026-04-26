@@ -67,6 +67,60 @@ To pin to a specific version (including for rollback):
 ~/prowlarr-stack/update --version v0.1.0 --yes
 ```
 
+## Backup & restore
+
+Capture your VPN credentials, indexer setup, qBittorrent prefs, and
+download-client wiring into a single tarball, then drop it on any clean
+machine to reproduce the exact same configured stack — no UI re-setup.
+
+**Take a backup:**
+
+```sh
+~/prowlarr-stack/backup
+# → $HOME/prowlarr-stack-backup-<host>-<UTC>.tar.gz  (mode 600)
+```
+
+The script briefly stops the stack so SQLite is consistent, tars `.env` +
+`config/` + a small `BACKUP-MANIFEST`, then restarts. Use `--output PATH`
+to write somewhere other than `$HOME`, or `--no-stop` to snapshot live
+(faster, accepts a small risk of SQLite WAL inconsistency).
+
+**The tarball contains your WireGuard private key and qBittorrent
+password.** Treat it like a credential file: store it in a password
+manager, encrypted volume, or another safe location. As a guard rail,
+`./backup` refuses to write into a directory containing `.git/` or
+`.jj/`.
+
+**Restore on the same install dir:**
+
+```sh
+~/prowlarr-stack/restore /path/to/prowlarr-stack-backup-*.tar.gz
+```
+
+This stops the stack, snapshots your existing `.env` and `config/` to
+`.env.pre-restore-<UTC>` and `config.pre-restore-<UTC>/` (so you can
+roll back), extracts the backup, scrubs the source machine's
+`HOST_LAN_IP` / `LAN_SUBNET` so this machine's values are auto-detected,
+re-runs `./setup --non-interactive` to re-patch the Prowlarr DB and
+qBittorrent password against the new IP, and re-runs `./check`.
+
+**Restore as part of a clean install (one shot):**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/media-centarr/prowlarr-stack/main/install.sh | sh -s -- --restore /path/to/backup.tar.gz
+```
+
+The bootstrap downloads the latest release, extracts it, and hands off
+to `./install --restore`, which skips the interactive prompts and
+applies the backup directly. Pass an absolute path; the script
+validates the file is readable before downloading anything.
+
+**Cross-machine LAN safety.** `HOST_LAN_IP` is baked into Prowlarr's
+download-client row in `prowlarr.db`. Restore strips that key from the
+restored `.env`, so the receiving machine's actual IP is detected and
+re-patched into the DB — your restored stack points qBittorrent at the
+right host, not the source machine's address.
+
 ## Uninstall
 
 ```sh

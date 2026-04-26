@@ -19,6 +19,25 @@ for required in .version docker-compose.yml setup scripts/lib/common; do
   fi
 done
 
+# --- flag parsing ---
+# We pass through unknown flags to ./setup, but pluck --restore PATH out for
+# our own use because it changes the install flow (skips interactive setup).
+RESTORE_FILE=""
+SETUP_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --restore) RESTORE_FILE="${2:-}"; shift 2 ;;
+    --restore=*) RESTORE_FILE="${1#--restore=}"; shift ;;
+    *) SETUP_ARGS+=("$1"); shift ;;
+  esac
+done
+
+if [[ -n "$RESTORE_FILE" ]]; then
+  RESTORE_FILE=$(readlink -f "$RESTORE_FILE")
+  [[ -f "$RESTORE_FILE" ]] || die "backup file not found: $RESTORE_FILE"
+  [[ -r "$RESTORE_FILE" ]] || die "backup file not readable: $RESTORE_FILE"
+fi
+
 VERSION=$(cat .version)
 INSTALL_DIR="$(pwd)"
 
@@ -26,10 +45,16 @@ echo ""
 echo "${COLOR_BOLD}prowlarr-stack $VERSION${COLOR_RESET}"
 echo "install dir: $INSTALL_DIR"
 
-# Run interactive setup (does prereqs, config, seed, patch DB, systemd, start, verify).
-./setup "$@"
+if [[ -n "$RESTORE_FILE" ]]; then
+  # Restore mode: hand off to ./restore. It does its own validation,
+  # snapshotting, and re-runs setup --non-interactive internally.
+  ./restore "$RESTORE_FILE" --yes
+else
+  # Normal install: run interactive setup (prereqs, config, seed, patch DB, systemd, start, verify).
+  ./setup "${SETUP_ARGS[@]}"
+fi
 
-# Setup succeeded — write MANIFEST last so it reflects final state.
+# Setup/restore succeeded — write MANIFEST last so it reflects final state.
 log_phase "writing MANIFEST"
 write_manifest "$INSTALL_DIR" "$VERSION"
 log_ok "MANIFEST" "written to $INSTALL_DIR/MANIFEST"

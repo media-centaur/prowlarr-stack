@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# Snapshot a prowlarr-stack install into a portable tarball.
+#
+# Captures: .env (VPN creds, qBT password) + config/ (prowlarr.db, qBittorrent.conf,
+# categories.json, etc.) + a small BACKUP-MANIFEST. Restore with ./restore.
+#
+# By default writes to $HOME/prowlarr-stack-backup-<host>-<UTC>.tar.gz at mode 600.
+# Refuses to write into a directory containing .git/ or .jj/, since the tarball
+# contains your WireGuard private key — a single accidental commit and you're
+# leaking secrets to the world.
+#
+# Flags:
+#   --output PATH   write tarball here (override default $HOME location)
+#   --no-stop       skip stopping the stack before snapshotting (faster, but
+#                   SQLite writes during tar can produce an inconsistent .db)
+#   --yes           skip confirmations
+set -euo pipefail
+
+cd "$(dirname "$0")"
+# shellcheck source=scripts/lib/common
+source scripts/lib/common
+
+OUTPUT=""
+NO_STOP=0
+YES=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output) OUTPUT="${2:-}"; shift 2 ;;
+    --output=*) OUTPUT="${1#--output=}"; shift ;;
+    --no-stop) NO_STOP=1; shift ;;
+    --yes) YES=1; shift ;;
+    -h|--help)
+      cat <<HELP
+Usage: ./backup [--output PATH] [--no-stop] [--yes]
+
+  --output PATH   tarball path (default: \$HOME/prowlarr-stack-backup-<host>-<UTC>.tar.gz)
+  --no-stop       don't stop the stack before tarring (risks SQLite WAL inconsistency)
+  --yes           skip confirmations
+
+The output tarball contains your WireGuard private key and qBittorrent
+password. Treat it like a credential file. Default location is your home
+directory; this script refuses to write into directories containing .git/
+or .jj/ to avoid accidental commits to a public repo.
+HELP
+      exit 0
+      ;;
+    *) die "unknown flag: $1 (try --help)" ;;
+  esac
+done
+
+# --- Sanity: this looks like an installed (or installable) prowlarr-stack dir ---
+for required in docker-compose.yml setup scripts/lib/common; do
+  [[ -e "$required" ]] || die "./backup must run from a prowlarr-stack install dir (missing: $required)"
+done
+[[ -f .env ]] || die ".env not found — there's nothing to back up; run ./install first"
+[[ -d config ]] || die "config/ not found — there's nothing to back up; run ./setup first"
+
+# --- Resolve output path ---
+HOSTNAME_SHORT=$(hostname -s 2>/dev/null || hostname || echo "host")
+TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
+DEFAULT_NAME="prowlarr-stack-backup-${HOSTNAME_SHORT}-${TIMESTAMP}.tar.gz"
+if [[ -z "$OUTPUT" ]]; then
+  OUTPUT="$HOME/$DEFAULT_NAME"
+fi
+
+# Refuse to write into a VCS dir — the tarball contains secrets.
+OUTPUT_DIR=$(dirname -- "$OUTPUT")
+[[ -d "$OUTPUT_DIR" ]] || die "output dir does not exist: $OUTPUT_DIR"
+# Walk up looking for .git or .jj — refuse if found.
+check_dir="$OUTPUT_DIR"
+while [[ "$check_dir" != "/" && "$check_dir" != "" ]]; do
+  if [[ -e "$check_dir/.git" || -e "$check_dir/.jj" ]]; then
+    die "refusing to write backup inside a git/jj repo: $check_dir contains a VCS dir.
+       The tarball holds your WireGuard private key — one accidental 'git add' away
+       from a public leak. Pass --output PATH to write somewhere outside any repo
+       (e.g. \$HOME, an external drive, or a password-manager attachment)."
+  fi
+  parent=$(dirname -- "$check_dir")
+  [[ "$parent" == "$check_dir" ]] && break
+  check_dir="$parent"
+done
+
+# Don't silently clobber.
+if [[ -e "$OUTPUT" ]]; then
+  die "$OUTPUT already exists — pick a different --output path or remove it first"
+fi
+
+# --- Plan summary + confirmation ---
+echo ""
+echo "${COLOR_BOLD}prowlarr-stack backup${COLOR_RESET}"
+log_info "source dir:   $(pwd)"
+log_info "output:       $OUTPUT"
+if [[ $NO_STOP -eq 0 ]]; then
+  log_info "stack action: stop → tar → start (briefly offline)"
+else
+  log_info "stack action: live snapshot (--no-stop; SQLite may be inconsistent)"
+fi
+log_warn "tarball will contain your WireGuard private key — store securely."
+
+if [[ $YES -eq 0 ]]; then
+  if ! prompt_yes_no "proceed?" y; then
+    log_info "aborted"
+    exit 0
+  fi
+fi
+
+# --- Stop stack (default) ---
+STACK_WAS_RUNNING=0
+if [[ $NO_STOP -eq 0 ]]; then
+  if systemctl --user is-active --quiet prowlarr-stack 2>/dev/null; then
+    STACK_WAS_RUNNING=1
+    log_phase "stopping stack"
+    systemctl --user stop prowlarr-stack
+    log_ok "prowlarr-stack" "stopped"
+  else
+    log_info "stack not running — skipping stop"
+  fi
+fi
+
+# Restart hook fires no matter how we exit, so a failed tar still leaves the
+# stack running.
+restart_if_was_running() {
+  if [[ $STACK_WAS_RUNNING -eq 1 ]]; then
+    log_phase "restarting stack"
+    systemctl --user start prowlarr-stack || log_warn "failed to restart prowlarr-stack — start manually with: systemctl --user start prowlarr-stack"
+  fi
+}
+trap 'restart_if_was_running' EXIT
+
+# --- Build BACKUP-MANIFEST ---
+log_phase "writing BACKUP-MANIFEST"
+TMPDIR_BACKUP=$(mktemp -d)
+trap 'restart_if_was_running; rm -rf "$TMPDIR_BACKUP"' EXIT
+MANIFEST_FILE="$TMPDIR_BACKUP/BACKUP-MANIFEST"
+
+# Pull a version string if we can — prefer .version (release installs),
+# fall back to MANIFEST line 1, fall back to "unknown".
+backup_version="unknown"
+if [[ -f .version ]]; then
+  backup_version=$(cat .version)
+elif [[ -f MANIFEST ]]; then
+  backup_version=$(parse_manifest_version MANIFEST 2>/dev/null || echo "unknown")
+fi
+
+{
+  echo "schema:        1"
+  echo "created:       $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "source-host:   $HOSTNAME_SHORT"
+  echo "source-user:   $(id -un)"
+  echo "stack-version: $backup_version"
+  echo ""
+  echo "# Files captured (paths relative to the install dir at restore time)"
+  echo "file: .env"
+  if [[ -f .envrc ]]; then echo "file: .envrc"; fi
+  echo "tree: config/"
+} > "$MANIFEST_FILE"
+
+# --- Build tarball ---
+log_phase "creating tarball"
+tar_args=( -czf "$OUTPUT" -C . .env )
+[[ -f .envrc ]] && tar_args+=( .envrc )
+tar_args+=( config -C "$TMPDIR_BACKUP" BACKUP-MANIFEST )
+tar "${tar_args[@]}"
+
+chmod 600 "$OUTPUT"
+size=$(du -h "$OUTPUT" | awk '{print $1}')
+log_ok "tarball" "$OUTPUT ($size)"
+
+# --- Done banner ---
+echo ""
+echo "${COLOR_BOLD}${COLOR_GREEN}backup complete.${COLOR_RESET}"
+echo "  restore on this machine:   $(pwd)/restore $OUTPUT"
+echo "  restore on a clean machine: curl -fsSL https://raw.githubusercontent.com/media-centarr/prowlarr-stack/main/install.sh | sh -s -- --restore $OUTPUT"
+echo ""
+echo "  ${COLOR_YELLOW}!${COLOR_RESET} this file contains your WireGuard private key + qBittorrent password."
+echo "    keep it off any public repo, public cloud, or shared system."

@@ -15,6 +15,7 @@ DIR=""
 VERSION=""
 YES=0
 FORCE=0
+RESTORE_FILE=""
 
 # --- flag parsing ---
 while [ $# -gt 0 ]; do
@@ -25,6 +26,8 @@ while [ $# -gt 0 ]; do
     --version) VERSION="${2:-}"; shift 2 ;;
     --yes) YES=1; shift ;;
     --force) FORCE=1; shift ;;
+    --restore=*) RESTORE_FILE="${1#--restore=}"; shift ;;
+    --restore) RESTORE_FILE="${2:-}"; shift 2 ;;
     -h|--help)
       cat <<HELP
 Usage: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh [OPTIONS]
@@ -35,6 +38,8 @@ Options:
   --version vX.Y.Z     install a specific release (default: latest)
   --yes                skip confirmations
   --force              install even if target dir exists (replaces it)
+  --restore PATH       restore from a backup tarball produced by ./backup
+                       (skips interactive setup; reproduces the source install)
   -h | --help          this text
 
 Env vars:
@@ -46,6 +51,20 @@ HELP
   esac
 done
 [ -z "$DIR" ] && DIR="${PROWLARR_STACK_DIR:-$DEFAULT_DIR}"
+
+# Validate --restore early so we don't bother downloading + extracting if
+# the file isn't there. Resolve to an absolute path because we may cd later.
+if [ -n "$RESTORE_FILE" ]; then
+  if [ ! -f "$RESTORE_FILE" ]; then
+    echo "error: --restore file not found: $RESTORE_FILE" >&2
+    exit 1
+  fi
+  if [ ! -r "$RESTORE_FILE" ]; then
+    echo "error: --restore file not readable: $RESTORE_FILE" >&2
+    exit 1
+  fi
+  RESTORE_FILE=$(readlink -f "$RESTORE_FILE")
+fi
 
 # --- tiny logger ---
 info() { printf '  %s\n' "$1"; }
@@ -149,7 +168,10 @@ printf '%s\n' "$TAG" > "$DIR/.version"
 # --- handoff ---
 info "handing off to tarball's ./install for interactive configuration..."
 cd "$DIR"
-if [ "$YES" -eq 1 ]; then
+if [ -n "$RESTORE_FILE" ]; then
+  # Restore mode is non-interactive (./restore --yes), so /dev/tty doesn't matter.
+  exec ./install --restore "$RESTORE_FILE"
+elif [ "$YES" -eq 1 ]; then
   exec ./install --non-interactive
 elif [ ! -t 0 ] && [ -e /dev/tty ]; then
   # Invoked via `curl … | sh`: stdin is the curl pipe (now closed), which

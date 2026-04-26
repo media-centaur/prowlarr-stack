@@ -6,6 +6,13 @@ downloads/
 MANIFEST
 tests/fixtures/*.tmp
 
+# Backup tarballs contain WireGuard private keys and qBittorrent passwords —
+# they MUST NOT be committed even by accident. ./backup defaults to writing
+# under $HOME and refuses VCS dirs, but defense in depth.
+prowlarr-stack-backup-*.tar.gz
+.env.pre-restore-*
+config.pre-restore-*/
+
 # AI-assistant tooling (per-developer state and instructions; not part of the project)
 .claude/
 CLAUDE.md

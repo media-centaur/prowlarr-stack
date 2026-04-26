@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -u
+
+# Tests are run from the repo root by ./scripts/test, so paths are relative to
+# the repo, not this file.
+REPO_ROOT=$(pwd)
+
+# _make_fake_install <dir>
+# Populates <dir> with the minimum surface ./backup expects: docker-compose.yml,
+# setup, scripts/lib/common, .env, config/, plus the actual backup script under
+# test (copied from REPO_ROOT). Stack-related calls in ./backup are skipped via
+# --no-stop in the tests below.
+_make_fake_install() {
+  local dir="$1"
+  mkdir -p "$dir/scripts/lib" "$dir/config/prowlarr" "$dir/config/qbittorrent/qBittorrent"
+  cp "$REPO_ROOT/scripts/lib/common" "$dir/scripts/lib/common"
+  cp "$REPO_ROOT/backup" "$dir/backup"
+  chmod +x "$dir/backup"
+  # Stubs: just need to exist for the sanity check to pass.
+  echo "services: {}" > "$dir/docker-compose.yml"
+  echo "#!/usr/bin/env bash" > "$dir/setup"
+  chmod +x "$dir/setup"
+  echo "v0.0.0-test" > "$dir/.version"
+  # Real-ish content so we can verify the backup faithfully captures it.
+  cat > "$dir/.env" <<'EOF'
+VPN_SERVICE_PROVIDER=nordvpn
+WIREGUARD_PRIVATE_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+HOST_LAN_IP=192.168.1.10
+LAN_SUBNET=192.168.1.0/24
+QBITTORRENT_PASSWORD=hunter2
+EOF
+  chmod 600 "$dir/.env"
+  echo "<Config><Port>9696</Port></Config>" > "$dir/config/prowlarr/config.xml"
+  echo "marker-prowlarr-db" > "$dir/config/prowlarr/prowlarr.db"
+  echo '[Preferences]' > "$dir/config/qbittorrent/qBittorrent/qBittorrent.conf"
+  echo '{"prowlarr":{"save_path":"/downloads/completed"}}' > "$dir/config/qbittorrent/qBittorrent/categories.json"
+}
+
+test_backup_creates_tarball_with_expected_entries() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  local out="$tmp/out.tar.gz"
+  ( cd "$tmp/install" && ./backup --no-stop --yes --output "$out" >/dev/null )
+  [[ -f "$out" ]]
+  local listing; listing=$(tar tzf "$out")
+  echo "$listing" | grep -qx '.env'
+  echo "$listing" | grep -qx 'BACKUP-MANIFEST'
+  echo "$listing" | grep -qE '^config/'
+  echo "$listing" | grep -qx 'config/prowlarr/prowlarr.db'
+  echo "$listing" | grep -qx 'config/qbittorrent/qBittorrent/qBittorrent.conf'
+  rm -rf "$tmp"
+}
+
+test_backup_writes_chmod_600_output() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  local out="$tmp/out.tar.gz"
+  ( cd "$tmp/install" && ./backup --no-stop --yes --output "$out" >/dev/null )
+  local mode; mode=$(stat -c '%a' "$out")
+  [[ "$mode" == "600" ]]
+  rm -rf "$tmp"
+}
+
+test_backup_manifest_has_schema_and_metadata() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  local out="$tmp/out.tar.gz"
+  ( cd "$tmp/install" && ./backup --no-stop --yes --output "$out" >/dev/null )
+  local manifest; manifest=$(tar xzfO "$out" BACKUP-MANIFEST)
+  echo "$manifest" | grep -qE '^schema:[[:space:]]+1$'
+  echo "$manifest" | grep -qE '^created:'
+  echo "$manifest" | grep -qE '^source-host:'
+  echo "$manifest" | grep -qE '^stack-version:[[:space:]]+v0\.0\.0-test'
+  rm -rf "$tmp"
+}
+
+test_backup_refuses_to_overwrite_existing_output() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  local out="$tmp/out.tar.gz"
+  : > "$out"
+  ! ( cd "$tmp/install" && ./backup --no-stop --yes --output "$out" 2>/dev/null )
+  rm -rf "$tmp"
+}
+
+test_backup_refuses_to_write_into_git_repo() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  local repo="$tmp/protected"
+  mkdir -p "$repo/.git"
+  ! ( cd "$tmp/install" && ./backup --no-stop --yes --output "$repo/leak.tar.gz" 2>/dev/null )
+  rm -rf "$tmp"
+}
+
+test_backup_refuses_to_write_into_jj_repo() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  local repo="$tmp/protected"
+  mkdir -p "$repo/.jj"
+  ! ( cd "$tmp/install" && ./backup --no-stop --yes --output "$repo/leak.tar.gz" 2>/dev/null )
+  rm -rf "$tmp"
+}
+
+test_backup_fails_when_env_missing() {
+  local tmp; tmp=$(mktemp -d)
+  _make_fake_install "$tmp/install"
+  rm "$tmp/install/.env"
+  ! ( cd "$tmp/install" && ./backup --no-stop --yes --output "$tmp/out.tar.gz" 2>/dev/null )
+  rm -rf "$tmp"
+}
