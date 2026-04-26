@@ -345,13 +345,23 @@ echo ""
 echo "  ${COLOR_BOLD}qBittorrent${COLOR_RESET}"
 echo "    URL       http://${lan_ip}:8080"
 echo "    Username  admin"
-echo "    Password  ${COLOR_YELLOW}${qbt_pw}${COLOR_RESET}   ${COLOR_DIM}(static — change in .env as QBITTORRENT_PASSWORD and re-run ./setup)${COLOR_RESET}"
+# Display path: prefer ~-relative when install dir is under $HOME, since the
+# user's shell is back in their original CWD by now (curl-bootstrap installs
+# into ~/prowlarr-stack and ends there). Bare `./check` would not work.
+# (The ${var/#pat/replacement} form can't take $HOME as the pattern because
+# $HOME contains '/' chars that break the substitution syntax.)
+if [[ "$STACK_DIR" == "$HOME"/* ]]; then
+  display_dir="~${STACK_DIR#"$HOME"}"
+else
+  display_dir="$STACK_DIR"
+fi
+echo "    Password  ${COLOR_YELLOW}${qbt_pw}${COLOR_RESET}   ${COLOR_DIM}(static — change in .env as QBITTORRENT_PASSWORD and re-run ${display_dir}/setup)${COLOR_RESET}"
 echo ""
 echo ""
 echo "${COLOR_BOLD}Next step:${COLOR_RESET} add indexers in Prowlarr."
 echo "  open ${COLOR_CYAN}http://${lan_ip}:9696${COLOR_RESET} → Indexers → ${COLOR_BOLD}Add Indexer${COLOR_RESET}"
 echo "  ${COLOR_DIM}qBittorrent is already wired in as the download client.${COLOR_RESET}"
 echo ""
-echo "verify isolation any time:   ${COLOR_CYAN}./check${COLOR_RESET}"
-echo "update stack:                ${COLOR_CYAN}./update${COLOR_RESET}"
-echo "stop:                        ${COLOR_CYAN}./scripts/stop${COLOR_RESET}"
+echo "verify isolation any time:   ${COLOR_CYAN}${display_dir}/check${COLOR_RESET}"
+echo "update stack:                ${COLOR_CYAN}${display_dir}/update${COLOR_RESET}"
+echo "stop:                        ${COLOR_CYAN}${display_dir}/scripts/stop${COLOR_RESET}"
