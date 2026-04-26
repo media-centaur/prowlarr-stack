@@ -9,6 +9,19 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.3.3] - 2026-04-26
+
+### Added
+- The bootstrap installer now announces the resolved version up front
+  (`Installing prowlarr-stack vX.Y.Z`) before downloading, so you can see
+  what you're about to install rather than only at the very end.
+- `./setup`'s banner now shows the installed version next to the
+  installer title (sourced from `.version`).
+- A "Next step" hint at the end of setup points you straight at
+  Prowlarr's Indexers page, since adding indexers is the only thing left
+  to configure once the stack is up — qBittorrent is already wired in as
+  the download client by setup.
+
 ## [0.3.2] - 2026-04-26
 
 ### Fixed
