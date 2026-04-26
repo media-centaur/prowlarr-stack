@@ -9,6 +9,24 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.3.2] - 2026-04-26
+
+### Fixed
+- Storage path mount check now accepts subdirectories of a mount. v0.3.0
+  used `mountpoint -q`, which returns true only when the path is *itself*
+  a mountpoint. With `/mnt/videos` as your mount and
+  `/mnt/videos/downloads` as your chosen path, setup wrongly prompted you
+  to opt into `ALLOW_NON_MOUNTPOINT=1` — defeating the very protection
+  the check was added to provide. The check now uses `findmnt --target`
+  to resolve the closest containing mount, which is the question we
+  actually want to answer. `wait-for-mount` was fixed the same way.
+
+### Changed
+- Default `COMPLETED_DIR` is now `/mnt/videos/completed` (was
+  `/mnt/videos/Videos`). Symmetric with `DOWNLOADS_DIR=/mnt/videos/downloads`,
+  no brand-y capitalization. Existing installs with `/mnt/videos/Videos`
+  in their `.env` are unaffected.
+
 ## [0.3.1] - 2026-04-26
 
 ### Fixed
