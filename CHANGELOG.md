@@ -9,6 +9,33 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.3.0] - 2026-04-26
+
+### Added
+- Configurable storage paths. `DOWNLOADS_DIR` and `COMPLETED_DIR` in `.env`
+  set the host paths bind-mounted into qBittorrent. Defaults preserve the
+  prior `/mnt/videos/{downloads,Videos}` layout, so a returning user just
+  hits Enter at the setup prompts.
+- Mountpoint guard. Setup verifies each storage path is a real kernel
+  mountpoint and refuses to start the stack if the OS mount didn't come
+  up — preventing silent writes to the root filesystem. The generated
+  systemd user unit also gets `RequiresMountsFor=` for both paths, so
+  reboots wait for the underlying mounts.
+- `ALLOW_NON_MOUNTPOINT=1` opt-out for single-disk hosts where storage is
+  a plain directory rather than a dedicated mount. Setup offers this
+  interactively when it detects a non-mountpoint, or you can set it
+  upfront in `.env`.
+
+### Changed
+- Backup / restore now carries your chosen storage paths across machines.
+  `DOWNLOADS_DIR` and `COMPLETED_DIR` live in `.env`, which is already
+  captured in the backup tarball — restoring on a different host no
+  longer requires hand-editing `docker-compose.yml`. If the destination
+  doesn't have those paths mounted, restore hard-fails with a precise
+  error rather than silently writing to the wrong location.
+- `./uninstall --purge-data` removes the contents of whichever paths you
+  configured, instead of the previously-hardcoded `/mnt/videos/...`.
+
 ## [0.2.2] - 2026-04-26
 
 ### Fixed
