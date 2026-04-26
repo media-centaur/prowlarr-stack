@@ -9,6 +9,41 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.4.0] - 2026-04-26
+
+### Added
+- Optional VPN routing for qBittorrent. `./setup` now asks whether
+  qBittorrent should go direct via your ISP (default, recommended) or
+  share gluetun's tunnel. Direct mode keeps qBT at full ISP speed and
+  preserves inbound peer connectivity for seeding — your indexer
+  browsing in Prowlarr is hidden by the VPN regardless. Opt into
+  tunneled mode if you specifically want qBT's IP hidden from peers
+  and you accept the speed hit and (for most providers) loss of
+  inbound peers. The choice persists in `.env` as
+  `QBITTORRENT_USE_VPN`; flip any time with `./setup --reconfigure`.
+- New compose overlay `docker-compose.qbt-vpn.yml` activated via
+  `COMPOSE_FILE` in `.env` when tunneled mode is selected. In tunneled
+  mode qBittorrent's host ports (8080, 6881) are published by gluetun
+  rather than qBittorrent itself, since `network_mode: service:gluetun`
+  is incompatible with the container publishing its own ports.
+- Prerequisite checks for `findmnt` (used by storage path validation)
+  and `systemctl --user` (the installer enables a user-scope unit for
+  autostart on reboot). Both have been required since v0.3.0 / always,
+  but were never gated — so a missing util-linux or a container env
+  without user-scope systemd would fail mid-flow rather than up front.
+  Now both fail fast in install.sh and in setup's prerequisites phase.
+
+### Changed
+- `./check` and the post-install verification now flip their
+  assertion based on `QBITTORRENT_USE_VPN`. Direct mode requires
+  prowlarr's external IP to differ from qBittorrent's (same IP
+  means prowlarr is leaking past the VPN). Tunneled mode requires
+  the two IPs to match (different IPs means qBT escaped the tunnel).
+- In tunneled mode, Prowlarr's download-client row in `prowlarr.db`
+  is patched to point at `127.0.0.1:8080` rather than
+  `${HOST_LAN_IP}:8080`, since the two services now share gluetun's
+  network namespace and the LAN bypass isn't needed.
+
 ## [0.3.4] - 2026-04-26
 
 ### Fixed
