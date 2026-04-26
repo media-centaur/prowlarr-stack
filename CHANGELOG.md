@@ -9,6 +9,15 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.3.4] - 2026-04-26
+
+### Fixed
+- The post-install summary now prints absolute paths (or `~/prowlarr-stack/`)
+  for `check`, `update`, and `scripts/stop`, instead of bare `./check` etc.
+  After the curl-bootstrap install, your shell is still in the directory
+  you ran the bootstrap from — not the install dir — so the relative paths
+  it used to print would have failed.
+
 ## [0.3.3] - 2026-04-26
 
 ### Added
