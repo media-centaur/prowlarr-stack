@@ -9,6 +9,14 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.3.1] - 2026-04-26
+
+### Fixed
+- Re-tagged release of v0.3.0. The v0.3.0 tag was pushed but its release
+  workflow failed before publishing artifacts, due to a shellcheck warning
+  on a cross-source variable in the storage-paths code added in 0.3.0. The
+  warning is suppressed; functionally identical to the intended v0.3.0.
+
 ## [0.3.0] - 2026-04-26
 
 ### Added
