@@ -230,9 +230,29 @@ else
 fi
 log_ok ".env" "written (chmod 600)"
 
-# direnv integration (opt-in).
+# direnv integration (opt-in, off by default).
+#
+# Background for the user: direnv is a shell add-on that auto-loads env vars
+# from a per-directory .envrc when you cd into the dir. With `dotenv` in
+# .envrc, your `.env` becomes part of your shell environment whenever
+# you're inside the install dir.
+#
+# Why we ASK rather than just doing it: most users don't need it. The
+# stack's wrapper scripts (./scripts/start, ./check, etc.) cd into the
+# install dir before running docker compose, which already auto-reads
+# .env from CWD. direnv only adds value if you like running raw
+# `docker compose ...` commands from inside the install dir and want
+# COMPOSE_FILE / DOWNLOADS_DIR / etc. set in your shell automatically.
+#
+# Default no — recommend yes only if you're a direnv user already and
+# know you'll want this.
 if [[ $NONINTERACTIVE -eq 0 ]] && command -v direnv >/dev/null 2>&1 && [[ ! -f .envrc ]]; then
-  if prompt_yes_no "detected direnv — create .envrc to auto-load .env in this dir?" n; then
+  echo ""
+  log_info "direnv detected. Creating ${COLOR_BOLD}.envrc${COLOR_RESET} (one line: ${COLOR_DIM}dotenv${COLOR_RESET}) makes your shell"
+  log_info "auto-load .env when you cd into this dir, so raw \`docker compose ...\` commands"
+  log_info "pick up COMPOSE_FILE etc. without you sourcing anything."
+  log_info "${COLOR_DIM}Skip this if you only use the wrapper scripts — they don't need it.${COLOR_RESET}"
+  if prompt_yes_no "create .envrc?" n; then
     echo "dotenv" > .envrc
     direnv allow . 2>/dev/null || log_warn "direnv allow failed — run it manually"
     log_ok ".envrc" "created and allowed"
