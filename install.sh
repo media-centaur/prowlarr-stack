@@ -58,13 +58,10 @@ HELP
   esac
 done
 
-# Track whether DIR was set explicitly so we know whether to prompt for it later.
-DIR_FROM_FLAG=0
-[ -n "$DIR" ] && DIR_FROM_FLAG=1
-# If not from --dir, fall back to env var (still counts as explicit) or empty.
+# If --dir wasn't given, fall back to PROWLARR_STACK_DIR env var. If neither
+# is set, DIR stays empty here and the interactive prompt below picks it up.
 if [ -z "$DIR" ] && [ -n "${PROWLARR_STACK_DIR:-}" ]; then
   DIR="$PROWLARR_STACK_DIR"
-  DIR_FROM_FLAG=1
 fi
 
 # Validate --restore early so we don't bother downloading + extracting if
@@ -153,10 +150,11 @@ if [ -z "$DIR" ] && [ "$YES" -eq 0 ] && [ -z "$RESTORE_FILE" ] && { [ -t 0 ] || 
     IFS= read -r answer < /dev/tty
   fi
   [ -z "$answer" ] && answer="$default_dir"
-  # Expand a leading ~ since `read -r` doesn't do it.
+  # Expand a leading ~ since `read -r` doesn't do it. Backslash-escape the
+  # tildes so shellcheck doesn't think we meant them to expand (SC2088).
   case "$answer" in
-    '~') answer="$HOME" ;;
-    '~/'*) answer="$HOME/${answer#~/}" ;;
+    \~) answer="$HOME" ;;
+    \~/*) answer="$HOME/${answer#\~/}" ;;
   esac
   case "$answer" in
     /*) ;;
