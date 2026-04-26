@@ -34,23 +34,38 @@ Usage: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh [
    or: sh install.sh [OPTIONS]
 
 Options:
-  --dir PATH           install directory (default: \$HOME/prowlarr-stack)
+  --dir PATH           install directory (skips the prompt below; default: \$HOME/prowlarr-stack)
   --version vX.Y.Z     install a specific release (default: latest)
-  --yes                skip confirmations
+  --yes                skip all prompts (uses default install dir; for non-interactive runs)
   --force              install even if target dir exists (replaces it)
   --restore PATH       restore from a backup tarball produced by ./backup
                        (skips interactive setup; reproduces the source install)
   -h | --help          this text
 
+Interactive prompt:
+  When run interactively (no --dir, no --yes, no --restore, and a controlling
+  terminal is available), the bootstrap asks for the install directory after
+  resolving the release version. Press Enter to accept the default
+  \$HOME/prowlarr-stack, or type any other absolute path. Tilde (~/foo) is
+  expanded.
+
 Env vars:
-  PROWLARR_STACK_DIR    same as --dir
+  PROWLARR_STACK_DIR    same as --dir (sets the install dir without a prompt)
 HELP
       exit 0
       ;;
     *) echo "error: unknown flag: $1 (try --help)" >&2; exit 1 ;;
   esac
 done
-[ -z "$DIR" ] && DIR="${PROWLARR_STACK_DIR:-$DEFAULT_DIR}"
+
+# Track whether DIR was set explicitly so we know whether to prompt for it later.
+DIR_FROM_FLAG=0
+[ -n "$DIR" ] && DIR_FROM_FLAG=1
+# If not from --dir, fall back to env var (still counts as explicit) or empty.
+if [ -z "$DIR" ] && [ -n "${PROWLARR_STACK_DIR:-}" ]; then
+  DIR="$PROWLARR_STACK_DIR"
+  DIR_FROM_FLAG=1
+fi
 
 # Validate --restore early so we don't bother downloading + extracting if
 # the file isn't there. Resolve to an absolute path because we may cd later.
@@ -92,15 +107,6 @@ if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user --version >/dev/
 fi
 ok "docker, compose, sqlite3, curl, tar, sha256sum, findmnt, systemctl --user"
 
-# --- install dir handling ---
-if [ -e "$DIR" ] && [ "$FORCE" -ne 1 ]; then
-  die "$DIR already exists. Run '$DIR/update' to upgrade, or pass --force to reinstall, or --dir=PATH to install elsewhere."
-fi
-if [ -e "$DIR" ] && [ "$FORCE" -eq 1 ]; then
-  info "removing existing $DIR (--force)"
-  rm -rf "$DIR"
-fi
-
 # --- resolve release ---
 resolve_release() {
   if [ -n "$VERSION" ]; then
@@ -126,6 +132,51 @@ info "resolving release..."
 TAG=$(resolve_release)
 ok "release: $TAG"
 printf '\n\033[1m\033[36mInstalling prowlarr-stack %s\033[0m\n\n' "$TAG"
+
+# --- prompt for install dir if not specified ---
+# Asked AFTER the version banner (so the user knows what they're about to
+# install) and BEFORE the existence check + download (so picking a different
+# path doesn't waste a download). Skipped when:
+#   - --dir or PROWLARR_STACK_DIR was set (user already chose)
+#   - --yes (non-interactive)
+#   - --restore (non-interactive)
+#   - no controlling terminal (curl-piped without a tty available)
+if [ -z "$DIR" ] && [ "$YES" -eq 0 ] && [ -z "$RESTORE_FILE" ] && { [ -t 0 ] || [ -e /dev/tty ]; }; then
+  default_dir="$DEFAULT_DIR"
+  info "install location"
+  info "  this dir holds the stack's config, scripts, and .env (chmod 600)"
+  info "  press Enter to accept the default, or type another absolute path"
+  printf '  install dir [%s]: ' "$default_dir"
+  if [ -t 0 ]; then
+    IFS= read -r answer
+  else
+    IFS= read -r answer < /dev/tty
+  fi
+  [ -z "$answer" ] && answer="$default_dir"
+  # Expand a leading ~ since `read -r` doesn't do it.
+  case "$answer" in
+    '~') answer="$HOME" ;;
+    '~/'*) answer="$HOME/${answer#~/}" ;;
+  esac
+  case "$answer" in
+    /*) ;;
+    *) die "install dir must be an absolute path (got: $answer)" ;;
+  esac
+  DIR="$answer"
+fi
+# Fallback for non-interactive runs where DIR is still unset.
+[ -z "$DIR" ] && DIR="$DEFAULT_DIR"
+
+# --- install dir existence check ---
+# Done AFTER the prompt so an interactive user can pick a different path
+# rather than getting kicked out at "$DIR already exists".
+if [ -e "$DIR" ] && [ "$FORCE" -ne 1 ]; then
+  die "$DIR already exists. Run '$DIR/update' to upgrade, or pass --force to reinstall, or pick another path."
+fi
+if [ -e "$DIR" ] && [ "$FORCE" -eq 1 ]; then
+  info "removing existing $DIR (--force)"
+  rm -rf "$DIR"
+fi
 
 TARBALL="prowlarr-stack-${TAG}.tar.gz"
 URL_TAR="$DL_ROOT/$TAG/$TARBALL"
