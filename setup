@@ -31,7 +31,13 @@ HELP
 done
 
 echo ""
-echo "${COLOR_BOLD}prowlarr-stack installer${COLOR_RESET}"
+stack_version=""
+[[ -f .version ]] && stack_version=$(cat .version)
+if [[ -n "$stack_version" ]]; then
+  echo "${COLOR_BOLD}prowlarr-stack installer${COLOR_RESET}  ${COLOR_DIM}${stack_version}${COLOR_RESET}"
+else
+  echo "${COLOR_BOLD}prowlarr-stack installer${COLOR_RESET}"
+fi
 
 # --- Phase 1: prerequisites ---
 log_phase "prerequisites"
@@ -341,6 +347,10 @@ echo "    URL       http://${lan_ip}:8080"
 echo "    Username  admin"
 echo "    Password  ${COLOR_YELLOW}${qbt_pw}${COLOR_RESET}   ${COLOR_DIM}(static — change in .env as QBITTORRENT_PASSWORD and re-run ./setup)${COLOR_RESET}"
 echo ""
+echo ""
+echo "${COLOR_BOLD}Next step:${COLOR_RESET} add indexers in Prowlarr."
+echo "  open ${COLOR_CYAN}http://${lan_ip}:9696${COLOR_RESET} → Indexers → ${COLOR_BOLD}Add Indexer${COLOR_RESET}"
+echo "  ${COLOR_DIM}qBittorrent is already wired in as the download client.${COLOR_RESET}"
 echo ""
 echo "verify isolation any time:   ${COLOR_CYAN}./check${COLOR_RESET}"
 echo "update stack:                ${COLOR_CYAN}./update${COLOR_RESET}"

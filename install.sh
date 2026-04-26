@@ -122,6 +122,7 @@ resolve_release() {
 info "resolving release..."
 TAG=$(resolve_release)
 ok "release: $TAG"
+printf '\n\033[1m\033[36mInstalling prowlarr-stack %s\033[0m\n\n' "$TAG"
 
 TARBALL="prowlarr-stack-${TAG}.tar.gz"
 URL_TAR="$DL_ROOT/$TAG/$TARBALL"
