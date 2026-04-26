@@ -9,6 +9,16 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.4.1] - 2026-04-26
+
+### Fixed
+- The direnv prompt during setup now explains what direnv is, what
+  saying yes does, and (more importantly) when you actually need it.
+  Previously the bare `create .envrc to auto-load .env in this dir?`
+  question gave you no way to make an informed choice. Default stays
+  no — most users only run the wrapper scripts, which already pick up
+  `.env` without direnv's help.
+
 ## [0.4.0] - 2026-04-26
 
 ### Added
