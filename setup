@@ -262,11 +262,14 @@ verify_isolation || die "VPN isolation verification FAILED — see above and che
 # --- Phase 12: credentials summary ---
 log_phase "credentials & endpoints"
 
+# Prowlarr generates the API key on first startup, then writes it back to
+# config.xml. Poll instead of reading once — gluetun-healthy doesn't mean
+# Prowlarr has finished initializing.
 prowlarr_key=""
-if prowlarr_key=$(fetch_prowlarr_api_key); then
+if prowlarr_key=$(wait_for_prowlarr_api_key 30); then
   log_ok "Prowlarr API key" "from config/prowlarr/config.xml"
 else
-  log_warn "Prowlarr API key not readable from config/prowlarr/config.xml"
+  log_warn "Prowlarr API key not yet written after 30s — re-run ./setup, or grab it from the Prowlarr UI later"
 fi
 
 echo ""

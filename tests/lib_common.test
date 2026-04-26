@@ -174,3 +174,72 @@ test_provider_needs_addresses_unknown_defaults_to_yes() {
   # unknown slug → prompt optionally → returns 0 (yes)
   provider_needs_addresses "giganews"
 }
+
+test_fetch_prowlarr_api_key_returns_key_when_present() {
+  local tmp; tmp=$(mktemp)
+  cat > "$tmp" <<'EOF'
+<Config>
+  <Port>9696</Port>
+  <ApiKey>abcdef0123456789abcdef0123456789</ApiKey>
+</Config>
+EOF
+  local key; key=$(fetch_prowlarr_api_key "$tmp")
+  [[ "$key" == "abcdef0123456789abcdef0123456789" ]]
+  rm -f "$tmp"
+}
+
+test_fetch_prowlarr_api_key_returns_nonzero_when_empty() {
+  local tmp; tmp=$(mktemp)
+  cat > "$tmp" <<'EOF'
+<Config><ApiKey></ApiKey></Config>
+EOF
+  ! fetch_prowlarr_api_key "$tmp" 2>/dev/null
+  rm -f "$tmp"
+}
+
+test_fetch_prowlarr_api_key_returns_nonzero_when_missing_file() {
+  ! fetch_prowlarr_api_key "/nonexistent/config.xml" 2>/dev/null
+}
+
+test_wait_for_prowlarr_api_key_returns_immediately_when_present() {
+  local tmp; tmp=$(mktemp)
+  cat > "$tmp" <<'EOF'
+<Config><ApiKey>cafef00dcafef00dcafef00dcafef00d</ApiKey></Config>
+EOF
+  local before after; before=$SECONDS
+  local key; key=$(wait_for_prowlarr_api_key 5 "$tmp")
+  after=$SECONDS
+  [[ "$key" == "cafef00dcafef00dcafef00dcafef00d" ]]
+  # Should not have spent the full timeout polling — under 2s is plenty.
+  (( after - before < 2 ))
+  rm -f "$tmp"
+}
+
+test_wait_for_prowlarr_api_key_times_out_when_empty() {
+  local tmp; tmp=$(mktemp)
+  cat > "$tmp" <<'EOF'
+<Config><ApiKey></ApiKey></Config>
+EOF
+  local before after; before=$SECONDS
+  ! wait_for_prowlarr_api_key 2 "$tmp"
+  after=$SECONDS
+  (( after - before >= 2 ))
+  rm -f "$tmp"
+}
+
+test_wait_for_prowlarr_api_key_picks_up_late_write() {
+  local tmp; tmp=$(mktemp)
+  cat > "$tmp" <<'EOF'
+<Config><ApiKey></ApiKey></Config>
+EOF
+  # Background writer: after 1s, populate the ApiKey.
+  ( sleep 1; cat > "$tmp" <<'INNER'
+<Config><ApiKey>deadbeefdeadbeefdeadbeefdeadbeef</ApiKey></Config>
+INNER
+  ) &
+  local writer_pid=$!
+  local key; key=$(wait_for_prowlarr_api_key 5 "$tmp")
+  wait "$writer_pid"
+  [[ "$key" == "deadbeefdeadbeefdeadbeefdeadbeef" ]]
+  rm -f "$tmp"
+}

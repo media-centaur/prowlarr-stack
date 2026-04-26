@@ -537,6 +537,28 @@ fetch_prowlarr_api_key() {
   echo "$key"
 }
 
+# wait_for_prowlarr_api_key [timeout_seconds] [config_path]
+# Polls config.xml until <ApiKey> is non-empty, then echoes the key.
+# Prowlarr generates the API key on first startup and writes it back to
+# config.xml — there's a race between "containers up" (gluetun healthy) and
+# "Prowlarr finished initializing", so reading immediately after start gives
+# the seeded empty value. This helper closes that race.
+wait_for_prowlarr_api_key() {
+  local timeout="${1:-30}"
+  local path="${2:-config/prowlarr/config.xml}"
+  local elapsed=0
+  local key
+  while (( elapsed < timeout )); do
+    if key=$(fetch_prowlarr_api_key "$path" 2>/dev/null); then
+      echo "$key"
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  return 1
+}
+
 # wait_for_gluetun_healthy [timeout_seconds]
 # Polls gluetun's docker healthcheck until status=healthy, or times out.
 wait_for_gluetun_healthy() {

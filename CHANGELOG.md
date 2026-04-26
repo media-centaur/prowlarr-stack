@@ -9,6 +9,15 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.2.1] - 2026-04-26
+
+### Fixed
+- The post-install summary now actually prints the Prowlarr API key. Previously,
+  setup read `config/prowlarr/config.xml` immediately after gluetun became
+  healthy, but Prowlarr hadn't finished initializing yet — so the seeded empty
+  `<ApiKey>` was returned and you saw the "open the UI" fallback message.
+  Setup now polls for up to 30s until Prowlarr persists the generated key.
+
 ## [0.2.0] - 2026-04-26
 
 ### Added
