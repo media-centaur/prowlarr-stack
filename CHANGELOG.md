@@ -9,6 +9,19 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.4.5] - 2026-04-26
+
+### Changed
+- README and provider docs now make it explicit that a WireGuard VPN
+  subscription is required and there is no no-VPN mode. The first
+  paragraph points users without a VPN at `linuxserver/prowlarr` as a
+  simpler one-container alternative, so they self-select before
+  downloading. The provider table in `docs/providers.md` gains a
+  port-forwarding column so users picking a VPN see that signal up
+  front, and the stale "Mullvad forwards by default" / "AirVPN doesn't
+  forward" claims in the README are corrected (Mullvad dropped PF in
+  2023; AirVPN supports PF natively).
+
 ## [0.4.4] - 2026-04-26
 
 ### Fixed

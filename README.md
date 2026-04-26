@@ -2,6 +2,8 @@
 
 A self-hosted stack for discovering and downloading torrents on your home server. One command sets it up; another updates it; another tears it down.
 
+Indexer queries (and optionally torrent traffic) are routed through a WireGuard VPN tunnel — that's the point of this stack. If you don't want a VPN in the loop, [linuxserver/prowlarr](https://docs.linuxserver.io/images/docker-prowlarr/) is a simpler one-container option.
+
 ## What's in the stack
 
 | Tool | What it does |
@@ -18,7 +20,7 @@ Good for building a library of freely-licensed material — Blender Foundation o
 - A Linux host with Docker + Docker Compose v2
 - `sqlite3` installed (`pacman -S sqlite` / `apt install sqlite3`)
 - A mounted storage location for downloads (default `/mnt/videos`; configurable via `DOWNLOADS_DIR` and `COMPLETED_DIR` — see [Storage paths](#storage-paths))
-- A subscription with a [supported VPN provider](docs/providers.md)
+- **A WireGuard-capable VPN subscription** with a [supported provider](docs/providers.md). This is non-negotiable — the stack does not support a direct-to-ISP mode.
 
 ## Install
 
@@ -180,7 +182,7 @@ The generated systemd user unit also gets `RequiresMountsFor=…` for both paths
 **Direct is recommended.** Three reasons:
 
 1. **Speed.** VPN tunnels add latency and almost always cap bandwidth below your ISP line. qBT at full ISP speed is usually 5–10× faster than over a tunnel.
-2. **Seeding.** Most VPN providers don't forward inbound ports (NordVPN, ProtonVPN free, Surfshark, IVPN, AirVPN, Windscribe). With qBT tunneled, you can still *connect* to peers but they can't connect back — seeding becomes outgoing-only and tracker stats stay near zero. Mullvad forwards by default; ProtonVPN paid does on opt-in.
+2. **Seeding.** Many VPN providers don't forward inbound ports (NordVPN, ProtonVPN free, Surfshark, IVPN, Mullvad since 2023). With qBT tunneled, you can still *connect* to peers but they can't connect back — seeding becomes outgoing-only and tracker stats stay near zero. AirVPN supports PF natively; ProtonVPN paid and Windscribe paid support it on opt-in. See [docs/providers.md](docs/providers.md) for a per-provider table.
 3. **Indexer cover is independent.** Your Prowlarr indexer browsing is hidden by gluetun *regardless* of qBT's routing. The thing your ISP can fingerprint — what trackers you're searching — is already covered.
 
 **Opt into tunneled mode** if you specifically need qBT's IP hidden from peers and you accept the speed/seeding hit. Setup writes the right `COMPOSE_FILE` overlay (`docker-compose.qbt-vpn.yml`) so docker compose picks it up automatically. Switch any time with `./setup --reconfigure`.

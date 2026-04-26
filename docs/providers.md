@@ -4,16 +4,18 @@ The stack uses [gluetun](https://github.com/qdm12/gluetun) as its VPN gateway, w
 
 ## Provider summary
 
-| Provider   | Extra credentials needed                          | Where to get the key                                                 |
-| ---------- | ------------------------------------------------- | -------------------------------------------------------------------- |
-| NordVPN    | (none)                                            | Linux CLI extraction (see below)                                     |
-| ProtonVPN  | (none)                                            | `account.protonvpn.com` → Downloads → WireGuard config               |
-| Mullvad    | `WIREGUARD_ADDRESSES`                             | `mullvad.net` → Account → WireGuard                                  |
-| Surfshark  | `WIREGUARD_ADDRESSES`                             | `my.surfshark.com` → VPN → Manual setup → WireGuard                  |
-| IVPN       | `WIREGUARD_ADDRESSES`                             | `ivpn.net` → Account → WireGuard key generation                      |
-| AirVPN     | `WIREGUARD_ADDRESSES` + `WIREGUARD_PRESHARED_KEY` | `airvpn.org` → Client Area → Config Generator                        |
-| Windscribe | `WIREGUARD_ADDRESSES` + `WIREGUARD_PRESHARED_KEY` | `windscribe.com` → My Account → Config Generators → WireGuard        |
-| Any other  | varies                                            | See [gluetun's provider wiki](https://github.com/qdm12/gluetun-wiki/tree/main/setup/providers) |
+| Provider   | Extra credentials needed                          | Port forwarding         | Where to get the key                                                 |
+| ---------- | ------------------------------------------------- | ----------------------- | -------------------------------------------------------------------- |
+| NordVPN    | (none)                                            | No                      | Linux CLI extraction (see below)                                     |
+| ProtonVPN  | (none)                                            | Paid plans (opt-in)     | `account.protonvpn.com` → Downloads → WireGuard config               |
+| Mullvad    | `WIREGUARD_ADDRESSES`                             | No (removed 2023)       | `mullvad.net` → Account → WireGuard                                  |
+| Surfshark  | `WIREGUARD_ADDRESSES`                             | No                      | `my.surfshark.com` → VPN → Manual setup → WireGuard                  |
+| IVPN       | `WIREGUARD_ADDRESSES`                             | No                      | `ivpn.net` → Account → WireGuard key generation                      |
+| AirVPN     | `WIREGUARD_ADDRESSES` + `WIREGUARD_PRESHARED_KEY` | Yes                     | `airvpn.org` → Client Area → Config Generator                        |
+| Windscribe | `WIREGUARD_ADDRESSES` + `WIREGUARD_PRESHARED_KEY` | Paid plans (opt-in)     | `windscribe.com` → My Account → Config Generators → WireGuard        |
+| Any other  | varies                                            | check provider's docs   | See [gluetun's provider wiki](https://github.com/qdm12/gluetun-wiki/tree/main/setup/providers) |
+
+If you plan to opt qBittorrent into the VPN tunnel (`QBITTORRENT_USE_VPN=1`) and care about seeding, pick a provider that forwards ports. Otherwise peer connectivity is outbound-only and tracker stats stay near zero. Provider PF policies change — verify with your provider's current docs before you subscribe.
 
 All WireGuard private keys are 44 characters of base64, regardless of provider. The installer validates that format before accepting the key.
 
