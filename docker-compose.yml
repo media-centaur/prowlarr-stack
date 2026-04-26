@@ -65,6 +65,6 @@ services:
       - "6881:6881/udp"
     volumes:
       - ./config/qbittorrent:/config
-      - /mnt/videos/downloads:/downloads
-      - /mnt/videos/Videos:/downloads/completed
+      - ${DOWNLOADS_DIR:-/mnt/videos/downloads}:/downloads
+      - ${COMPLETED_DIR:-/mnt/videos/Videos}:/downloads/completed
     restart: "no"

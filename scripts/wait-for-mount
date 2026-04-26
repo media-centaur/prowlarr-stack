@@ -1,20 +1,49 @@
 #!/usr/bin/env bash
-# Wait for /mnt/videos to be a mount point (not just a directory on root fs).
-# Polls every 5 seconds for up to 5 minutes.
+# Wait for the configured storage paths to be real kernel mountpoints
+# (not just directories on the root fs). Polls every 5 seconds for up to
+# 5 minutes per path. Reads paths from .env in the install dir.
+#
+# Run as ExecStartPre by the systemd user unit. CWD is the install dir
+# via WorkingDirectory=.
+#
+# Skipped entirely when ALLOW_NON_MOUNTPOINT=1 — the user has opted into
+# plain directories on the root fs.
 
-MOUNT_PATH="/mnt/videos"
+set -euo pipefail
+
+# shellcheck source=lib/common
+source "$(dirname "$0")/lib/common"
+
+ENV_FILE=".env"
+[[ -f "$ENV_FILE" ]] || { echo "wait-for-mount: $ENV_FILE not found in $(pwd)" >&2; exit 1; }
+
+allow=$(read_env_value "$ENV_FILE" ALLOW_NON_MOUNTPOINT)
+if [[ "$allow" == "1" ]]; then
+  echo "wait-for-mount: ALLOW_NON_MOUNTPOINT=1 — skipping mount check"
+  exit 0
+fi
+
+dl=$(read_env_value "$ENV_FILE" DOWNLOADS_DIR)
+comp=$(read_env_value "$ENV_FILE" COMPLETED_DIR)
+[[ -n "$dl"   ]] || { echo "wait-for-mount: DOWNLOADS_DIR not set in $ENV_FILE" >&2; exit 1; }
+[[ -n "$comp" ]] || { echo "wait-for-mount: COMPLETED_DIR not set in $ENV_FILE" >&2; exit 1; }
+
 TIMEOUT=300
 INTERVAL=5
-ELAPSED=0
 
-while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
-  if mountpoint -q "$MOUNT_PATH"; then
-    echo "$MOUNT_PATH is mounted"
-    exit 0
-  fi
-  sleep "$INTERVAL"
-  ELAPSED=$((ELAPSED + INTERVAL))
-done
+wait_one() {
+  local path="$1" elapsed=0
+  while (( elapsed < TIMEOUT )); do
+    if mountpoint -q "$path"; then
+      echo "wait-for-mount: $path mounted"
+      return 0
+    fi
+    sleep "$INTERVAL"
+    elapsed=$((elapsed + INTERVAL))
+  done
+  echo "wait-for-mount: $path not mounted after ${TIMEOUT}s" >&2
+  return 1
+}
 
-echo "$MOUNT_PATH not mounted after ${TIMEOUT}s" >&2
-exit 1
+wait_one "$dl"
+[[ "$comp" == "$dl" ]] || wait_one "$comp"

@@ -75,12 +75,12 @@ prowlarr-stack/
 
 `./setup` runs these in order. Any failure stops the script with a precise error message.
 
-1. **Prerequisites** — docker, docker compose, sqlite3, the `ip` command, `/mnt/videos/Videos` mount.
-2. **Configuration** — VPN provider, WireGuard key (with provider-specific hints), optional `WIREGUARD_ADDRESSES` and `WIREGUARD_PRESHARED_KEY`, exit country, host LAN IP, LAN subnet. Auto-detects LAN values; validates each input before accepting.
+1. **Prerequisites** — docker, docker compose, sqlite3, python3, the `ip` command.
+2. **Configuration** — VPN provider, WireGuard key (with provider-specific hints), optional `WIREGUARD_ADDRESSES` and `WIREGUARD_PRESHARED_KEY`, exit country, host LAN IP, LAN subnet, `DOWNLOADS_DIR`, `COMPLETED_DIR`. Auto-detects LAN values; validates each input before accepting.
 3. **Write `.env`** — atomic (tmp file + rename), `chmod 600` before rename.
 4. **Seed `config/`** — copy from `defaults/` if the destination doesn't exist (idempotent; re-runs don't clobber state).
 5. **Patch `prowlarr.db`** — rewrites the qBittorrent download-client row's host + port to point at `${HOST_LAN_IP}:8080`. Uses SQLite's `json_set`, so it's idempotent.
-6. **Mount check** — confirms `/mnt/videos/Videos` exists.
+6. **Storage paths** — `validate_storage_paths` checks each of `DOWNLOADS_DIR` / `COMPLETED_DIR`: must exist as a directory and (unless `ALLOW_NON_MOUNTPOINT=1`) must be a real kernel mountpoint. In interactive mode, offers to opt into `ALLOW_NON_MOUNTPOINT=1` if a path is a plain dir; in `--non-interactive` mode (used by `restore`), hard-fails. The systemd unit gets `RequiresMountsFor=` for these paths unless the opt-out is active.
 7. **Systemd user service** — installs `~/.config/systemd/user/prowlarr-stack.service`, runs `daemon-reload + enable`.
 8. **Start** — `docker compose up -d`.
 9. **Wait for tunnel** — polls gluetun's healthcheck until green (60s timeout).

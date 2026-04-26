@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # prowlarr-stack uninstaller — reads MANIFEST and removes exactly what's listed.
-# Your downloaded media under /mnt/videos is preserved unless --purge-data.
+# Your downloaded media (DOWNLOADS_DIR + COMPLETED_DIR from .env) is preserved
+# unless --purge-data.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -25,8 +26,8 @@ Usage: ./uninstall [--yes] [--purge-images] [--purge-data --yes-really]
                     images (save bandwidth on reinstall) and your downloads.
   --yes             Skip confirmation.
   --purge-images    Also 'docker rmi' the pinned upstream images.
-  --purge-data      Also remove /mnt/videos/{downloads,Videos} contents.
-                    Requires --yes-really as a second guard.
+  --purge-data      Also remove the contents of DOWNLOADS_DIR and COMPLETED_DIR
+                    (read from .env). Requires --yes-really as a second guard.
 HELP
       exit 0
       ;;
@@ -46,6 +47,14 @@ if [[ ! -f "$MANIFEST" ]]; then
   HAVE_MANIFEST=0
   log_warn "MANIFEST not found — falling back to best-effort removal."
 fi
+
+# Resolve the data paths from .env before we shred it. Fall back to the
+# legacy hardcoded layout if .env is gone or the keys are absent — that
+# matches the layout an older install would have used.
+DOWNLOADS_DIR_VAL=$(read_env_value "$INSTALL_DIR/.env" DOWNLOADS_DIR)
+COMPLETED_DIR_VAL=$(read_env_value "$INSTALL_DIR/.env" COMPLETED_DIR)
+[[ -n "$DOWNLOADS_DIR_VAL" ]] || DOWNLOADS_DIR_VAL=/mnt/videos/downloads
+[[ -n "$COMPLETED_DIR_VAL" ]] || COMPLETED_DIR_VAL=/mnt/videos/Videos
 
 # --- plan ---
 log_phase "prowlarr-stack uninstaller"
@@ -72,13 +81,13 @@ if [[ $PURGE_IMAGES -eq 1 ]]; then
 fi
 if [[ $PURGE_DATA -eq 1 ]]; then
   echo "  • media data (--purge-data):"
-  echo "      /mnt/videos/downloads/"
-  echo "      /mnt/videos/Videos/"
+  echo "      $DOWNLOADS_DIR_VAL/"
+  echo "      $COMPLETED_DIR_VAL/"
 fi
 echo ""
 echo "Will KEEP (unless flagged):"
 [[ $PURGE_IMAGES -eq 0 ]] && echo "  • docker images (saves bandwidth on reinstall — pass --purge-images)"
-[[ $PURGE_DATA -eq 0 ]] && echo "  • /mnt/videos/downloads/ + /mnt/videos/Videos/ (your media)"
+[[ $PURGE_DATA -eq 0 ]] && echo "  • $DOWNLOADS_DIR_VAL/ + $COMPLETED_DIR_VAL/ (your media)"
 echo ""
 
 if [[ $YES -eq 0 ]]; then
@@ -138,7 +147,7 @@ fi
 
 if [[ $PURGE_DATA -eq 1 ]]; then
   log_phase "removing media data"
-  for path in /mnt/videos/downloads /mnt/videos/Videos; do
+  for path in "$DOWNLOADS_DIR_VAL" "$COMPLETED_DIR_VAL"; do
     if [[ -d "$path" ]]; then
       # Remove contents but leave the directory in place (mount points).
       find "$path" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -158,5 +167,5 @@ echo "${COLOR_BOLD}${COLOR_GREEN}uninstall complete.${COLOR_RESET}"
 echo ""
 echo "Still on your system (intentionally):"
 [[ $PURGE_IMAGES -eq 0 ]] && echo "  • docker images (run with --purge-images next time if you want them gone)"
-[[ $PURGE_DATA -eq 0 ]] && echo "  • /mnt/videos/downloads/ + /mnt/videos/Videos/ (your media)"
+[[ $PURGE_DATA -eq 0 ]] && echo "  • $DOWNLOADS_DIR_VAL/ + $COMPLETED_DIR_VAL/ (your media)"
 echo ""

@@ -17,7 +17,7 @@ Good for building a library of freely-licensed material — Blender Foundation o
 
 - A Linux host with Docker + Docker Compose v2
 - `sqlite3` installed (`pacman -S sqlite` / `apt install sqlite3`)
-- A mounted storage location at `/mnt/videos` for downloads
+- A mounted storage location for downloads (default `/mnt/videos`; configurable via `DOWNLOADS_DIR` and `COMPLETED_DIR` — see [Storage paths](#storage-paths))
 - A subscription with a [supported VPN provider](docs/providers.md)
 
 ## Install
@@ -127,12 +127,12 @@ right host, not the source machine's address.
 ~/prowlarr-stack/uninstall
 ```
 
-Reads `MANIFEST` and removes exactly what the installer put on your system: containers, networks, the systemd user unit, and the install dir (including `.env`). Your downloaded media under `/mnt/videos` is left alone by default.
+Reads `MANIFEST` and removes exactly what the installer put on your system: containers, networks, the systemd user unit, and the install dir (including `.env`). Your downloaded media under `DOWNLOADS_DIR` and `COMPLETED_DIR` is left alone by default.
 
 Options:
 
 - `--purge-images` — also `docker rmi` the pinned upstream images.
-- `--purge-data --yes-really` — also remove your media under `/mnt/videos`. The second flag is a deliberate guard.
+- `--purge-data --yes-really` — also remove the contents of `DOWNLOADS_DIR` and `COMPLETED_DIR`. The second flag is a deliberate guard.
 
 ## Daily use
 
@@ -154,6 +154,21 @@ To rotate a key, switch VPN provider, move to a new LAN, etc.:
 ```
 
 Your existing values appear as defaults at each prompt — hit Enter to keep, or type over to change.
+
+## Storage paths
+
+qBittorrent's host download paths are configured via two `.env` keys:
+
+- `DOWNLOADS_DIR` — bind-mounted to `/downloads` inside qBittorrent. In-flight torrents and the `incomplete/` subdir live here.
+- `COMPLETED_DIR` — bind-mounted to `/downloads/completed`. Completed downloads land here.
+
+Defaults: `/mnt/videos/downloads` and `/mnt/videos/Videos`. `./setup` prompts for both and verifies each path is a real kernel mountpoint via `mountpoint -q`. If the OS mount didn't come up, setup refuses to start the stack — that's the guard against silent writes to the root filesystem.
+
+The generated systemd user unit also gets `RequiresMountsFor=…` for both paths, so a reboot won't start the stack until the underlying filesystems are mounted.
+
+**Single-disk hosts.** If your storage is just a directory on the root filesystem (no dedicated mount), set `ALLOW_NON_MOUNTPOINT=1` in `.env`. Setup will skip the mountpoint check, `mkdir -p` the paths if needed, and emit the systemd unit without `RequiresMountsFor`. Setup also offers this as an interactive opt-in if it detects a non-mountpoint directory and you're not already opted in.
+
+**Backup/restore portability.** Both keys live in `.env`, so `./backup` captures them and `./restore` reapplies them on the destination machine. If the destination doesn't have those mounts, restore (which calls `setup --non-interactive`) hard-fails with a precise error rather than silently writing to the wrong location.
 
 ## Something broken?
 

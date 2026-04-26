@@ -324,18 +324,9 @@ check_ip_command() {
   return 1
 }
 
-# shellcheck disable=SC2120  # $1 is intentionally optional with default
-check_mount() {
-  local path="${1:-/mnt/videos/Videos}"
-  if [[ -d "$path" ]]; then
-    log_ok "$path" "present"
-    return 0
-  fi
-  log_fail "$path" "not a directory — mount your media drive first"
-  return 1
-}
-
 # run_prereqs — runs all prereq checks and returns non-zero if any failed.
+# Storage path checks live in validate_storage_paths and run AFTER configuration
+# (so we can validate the user's chosen paths, not a hardcoded location).
 run_prereqs() {
   local all_ok=0
   check_docker || all_ok=1
@@ -343,8 +334,82 @@ run_prereqs() {
   check_sqlite3 || all_ok=1
   check_python3 || all_ok=1
   check_ip_command || all_ok=1
-  check_mount || all_ok=1
   return $all_ok
+}
+
+# validate_storage_paths <downloads_dir> <completed_dir> <allow_non_mountpoint> <mode>
+# mode ∈ {interactive, non-interactive}. Returns 0 on success, dies otherwise.
+# Sets the global STORAGE_OPTIN=1 if the user opted into ALLOW_NON_MOUNTPOINT
+# during the interactive prompt; the caller is responsible for persisting that
+# to .env. Uses a global instead of stdout because log_* writes to stdout and
+# we want callers to see those messages, not capture them.
+#
+# Three modes per path:
+#   1. dir doesn't exist:
+#      - allow=1  → mkdir -p (caller's intent: plain dir is fine)
+#      - allow=0  → die (don't auto-mkdir into a path the user wants
+#                  mounted; that creates a phantom dir on the root fs
+#                  that masks future mount attempts)
+#   2. dir exists but isn't a mountpoint:
+#      - allow=1  → log_warn and proceed
+#      - interactive → prompt to opt into ALLOW_NON_MOUNTPOINT=1
+#      - non-interactive → die
+#   3. dir exists and IS a mountpoint:
+#      - log_ok and proceed
+validate_storage_paths() {
+  local dl="${1:-}" comp="${2:-}" allow="${3:-0}" mode="${4:-interactive}"
+  local opt_in=0  # set if user accepts the interactive opt-in
+  local path
+  STORAGE_OPTIN=0
+
+  if [[ -z "$dl" || -z "$comp" ]]; then
+    die "validate_storage_paths requires DOWNLOADS_DIR and COMPLETED_DIR"
+  fi
+  case "$mode" in interactive|non-interactive) ;; *) die "validate_storage_paths: bad mode '$mode'";; esac
+
+  for path in "$dl" "$comp"; do
+    # Step 1: existence.
+    if [[ ! -d "$path" ]]; then
+      if [[ "$allow" == "1" ]]; then
+        mkdir -p "$path" || die "could not create $path"
+        log_ok "$path" "created (ALLOW_NON_MOUNTPOINT=1)"
+        continue
+      fi
+      die "$path does not exist — mount your storage there first, then re-run.
+       (or set ALLOW_NON_MOUNTPOINT=1 in .env to use a plain directory; not recommended)"
+    fi
+
+    # Step 2: mountpoint check.
+    if mountpoint -q "$path"; then
+      log_ok "$path" "mounted"
+      continue
+    fi
+
+    # Not a mountpoint.
+    if [[ "$allow" == "1" || "$opt_in" == "1" ]]; then
+      log_warn "$path is not a mountpoint — proceeding (ALLOW_NON_MOUNTPOINT=1)"
+      continue
+    fi
+
+    if [[ "$mode" == "non-interactive" ]]; then
+      die "$path is not a mountpoint — refusing to start.
+       set ALLOW_NON_MOUNTPOINT=1 in .env if you really want a plain directory."
+    fi
+
+    # Interactive: offer to opt in.
+    log_warn "$path exists but is not a kernel mountpoint."
+    log_info "If you don't have a dedicated storage volume, you can use this directory as-is."
+    log_info "If you DO have one, abort here, mount it at $path, and re-run setup."
+    if prompt_yes_no "use $path as a plain directory and persist ALLOW_NON_MOUNTPOINT=1?" n; then
+      opt_in=1
+      log_ok "$path" "accepted (will persist ALLOW_NON_MOUNTPOINT=1)"
+    else
+      die "aborted — mount your storage at $path and re-run ./setup"
+    fi
+  done
+
+  STORAGE_OPTIN=$opt_in
+  return 0
 }
 
 # --- .env I/O ---
@@ -634,8 +699,11 @@ write_manifest() {
     echo "network:  $(basename "$dir")_default"
     echo ""
     echo "# External paths referenced (NOT owned; your data; uninstall leaves them unless --purge-data)"
-    echo "external:  /mnt/videos/downloads/    role:active downloads"
-    echo "external:  /mnt/videos/Videos/       role:completed downloads"
+    local _ext_dl _ext_comp
+    _ext_dl=$(read_env_value "$dir/.env" DOWNLOADS_DIR)
+    _ext_comp=$(read_env_value "$dir/.env" COMPLETED_DIR)
+    echo "external:  ${_ext_dl:-/mnt/videos/downloads}/    role:active downloads"
+    echo "external:  ${_ext_comp:-/mnt/videos/Videos}/       role:completed downloads"
   } > "$manifest"
   chmod 644 "$manifest"
 }

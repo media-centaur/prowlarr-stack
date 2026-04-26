@@ -49,6 +49,10 @@ wg_key=$(read_env_value "$ENV_FILE" WIREGUARD_PRIVATE_KEY)
 countries=$(read_env_value "$ENV_FILE" SERVER_COUNTRIES)
 lan_ip=$(read_env_value "$ENV_FILE" HOST_LAN_IP)
 lan_subnet=$(read_env_value "$ENV_FILE" LAN_SUBNET)
+downloads_dir=$(read_env_value "$ENV_FILE" DOWNLOADS_DIR)
+completed_dir=$(read_env_value "$ENV_FILE" COMPLETED_DIR)
+allow_non_mountpoint=$(read_env_value "$ENV_FILE" ALLOW_NON_MOUNTPOINT)
+[[ -z "$allow_non_mountpoint" ]] && allow_non_mountpoint=0
 
 # Provider selection (first, since it drives what else we ask for).
 provider=$(read_env_value "$ENV_FILE" VPN_SERVICE_PROVIDER)
@@ -149,6 +153,26 @@ if [[ -z "$lan_subnet" || $RECONFIGURE -eq 1 ]]; then
 fi
 validate_cidr "$lan_subnet" >/dev/null || die "invalid LAN_SUBNET: $lan_subnet"
 
+# Storage paths — host-side bind mount targets for qBittorrent.
+# Defaults match the legacy hardcoded layout so a returning user just hits Enter.
+if [[ -z "$downloads_dir" || $RECONFIGURE -eq 1 ]]; then
+  if [[ $NONINTERACTIVE -eq 1 ]]; then
+    [[ -n "$downloads_dir" ]] || die "DOWNLOADS_DIR not set in .env and --non-interactive was passed"
+  else
+    downloads_dir=$(prompt_with_default "Downloads dir (host path bind-mounted to /downloads)" "${downloads_dir:-/mnt/videos/downloads}")
+  fi
+fi
+if [[ -z "$completed_dir" || $RECONFIGURE -eq 1 ]]; then
+  if [[ $NONINTERACTIVE -eq 1 ]]; then
+    [[ -n "$completed_dir" ]] || die "COMPLETED_DIR not set in .env and --non-interactive was passed"
+  else
+    completed_dir=$(prompt_with_default "Completed dir (host path bind-mounted to /downloads/completed)" "${completed_dir:-/mnt/videos/Videos}")
+  fi
+fi
+[[ "$downloads_dir" = /* ]] || die "DOWNLOADS_DIR must be an absolute path: $downloads_dir"
+[[ "$completed_dir" = /* ]] || die "COMPLETED_DIR must be an absolute path: $completed_dir"
+[[ "$downloads_dir" != "$completed_dir" ]] || die "DOWNLOADS_DIR and COMPLETED_DIR must be different paths"
+
 # --- Phase 3: write .env ---
 log_phase "writing .env"
 write_env_value "$ENV_FILE" VPN_SERVICE_PROVIDER "$provider"
@@ -158,6 +182,9 @@ write_env_value "$ENV_FILE" WIREGUARD_PRESHARED_KEY "$wg_preshared"
 write_env_value "$ENV_FILE" SERVER_COUNTRIES "$countries"
 write_env_value "$ENV_FILE" HOST_LAN_IP "$lan_ip"
 write_env_value "$ENV_FILE" LAN_SUBNET "$lan_subnet"
+write_env_value "$ENV_FILE" DOWNLOADS_DIR "$downloads_dir"
+write_env_value "$ENV_FILE" COMPLETED_DIR "$completed_dir"
+write_env_value "$ENV_FILE" ALLOW_NON_MOUNTPOINT "$allow_non_mountpoint"
 log_ok ".env" "written (chmod 600)"
 
 # direnv integration (opt-in).
@@ -222,20 +249,38 @@ else
   log_warn "config/prowlarr/prowlarr.db not present — skipping patch"
 fi
 
-# --- Phase 7: /mnt/videos sanity check ---
-log_phase "mount check"
-if [[ ! -d /mnt/videos/Videos ]]; then
-  die "/mnt/videos/Videos not present — mount your media drive first"
+# --- Phase 7: storage path validation ---
+log_phase "storage paths"
+storage_mode="interactive"
+[[ $NONINTERACTIVE -eq 1 ]] && storage_mode="non-interactive"
+validate_storage_paths "$downloads_dir" "$completed_dir" "$allow_non_mountpoint" "$storage_mode"
+if [[ "${STORAGE_OPTIN:-0}" == "1" ]]; then
+  allow_non_mountpoint=1
+  write_env_value "$ENV_FILE" ALLOW_NON_MOUNTPOINT 1
+  log_ok "ALLOW_NON_MOUNTPOINT" "1 (persisted to .env)"
 fi
-log_ok "/mnt/videos" "mounted"
 
 # --- Phase 8: systemd user service ---
 log_phase "systemd user service"
 STACK_DIR="$(pwd)"
 SERVICE_DIR="$HOME/.config/systemd/user"
+SERVICE_FILE="$SERVICE_DIR/prowlarr-stack.service"
 mkdir -p "$SERVICE_DIR"
 sed "s|/path/to/media-centarr/prowlarr-stack|$STACK_DIR|g" \
-  defaults/prowlarr-stack.service > "$SERVICE_DIR/prowlarr-stack.service"
+  defaults/prowlarr-stack.service > "$SERVICE_FILE"
+
+# Add RequiresMountsFor under [Unit] when the paths are real kernel mountpoints.
+# In ALLOW_NON_MOUNTPOINT=1 mode the paths are plain dirs, so RequiresMountsFor
+# would have no effect — keep it out so the unit's intent is legible.
+if [[ "$allow_non_mountpoint" != "1" ]]; then
+  rmf_paths="$downloads_dir"
+  [[ "$completed_dir" != "$downloads_dir" ]] && rmf_paths="$rmf_paths $completed_dir"
+  awk -v rmf="RequiresMountsFor=$rmf_paths" '
+    /^\[Unit\]/ { print; print rmf; next }
+    { print }
+  ' "$SERVICE_FILE" > "${SERVICE_FILE}.tmp" && mv "${SERVICE_FILE}.tmp" "$SERVICE_FILE"
+fi
+
 systemctl --user daemon-reload
 systemctl --user enable prowlarr-stack.service >/dev/null
 log_ok "prowlarr-stack.service" "installed and enabled"
