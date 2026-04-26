@@ -9,7 +9,7 @@ A self-hosted stack for discovering and downloading torrents on your home server
 | **Prowlarr** | Searches across your chosen indexers (tracker sites) from one place. Has a web UI and an API that other tools can hit. |
 | **qBittorrent** | A BitTorrent client with a web UI. Handles the actual uploads and downloads. |
 | **FlareSolverr** | A helper that solves Cloudflare challenge pages on behalf of Prowlarr, so Prowlarr can reach indexers that use them. |
-| **gluetun** | A VPN gateway container. Routes Prowlarr + FlareSolverr through your VPN provider so your ISP doesn't see which indexers you're browsing. qBittorrent downloads run at full ISP speed, outside the VPN. |
+| **gluetun** | A VPN gateway container. Routes Prowlarr + FlareSolverr through your VPN provider so your ISP doesn't see which indexers you're browsing. By default qBittorrent runs at full ISP speed outside the VPN — see [qBittorrent network routing](#qbittorrent-network-routing) for the opt-in tunneled mode. |
 
 Good for building a library of freely-licensed material — Blender Foundation open movies, Internet Archive collections, Academic Torrents research datasets, Creative Commons music — or for curating your own library of content you already own.
 
@@ -169,6 +169,23 @@ The generated systemd user unit also gets `RequiresMountsFor=…` for both paths
 **Single-disk hosts.** If your storage is just a directory on the root filesystem (no dedicated mount), set `ALLOW_NON_MOUNTPOINT=1` in `.env`. Setup will skip the mountpoint check, `mkdir -p` the paths if needed, and emit the systemd unit without `RequiresMountsFor`. Setup also offers this as an interactive opt-in if it detects a non-mountpoint directory and you're not already opted in.
 
 **Backup/restore portability.** Both keys live in `.env`, so `./backup` captures them and `./restore` reapplies them on the destination machine. If the destination doesn't have those mounts, restore (which calls `setup --non-interactive`) hard-fails with a precise error rather than silently writing to the wrong location.
+
+## qBittorrent network routing
+
+`./setup` asks whether qBittorrent should go direct via your ISP (default) or share gluetun's tunnel. Two `.env` keys drive this:
+
+- `QBITTORRENT_USE_VPN=0` (default) — qBT runs on the docker bridge and gets full ISP speed.
+- `QBITTORRENT_USE_VPN=1` — qBT joins gluetun's network namespace; its egress and inbound peer traffic both go through the VPN.
+
+**Direct is recommended.** Three reasons:
+
+1. **Speed.** VPN tunnels add latency and almost always cap bandwidth below your ISP line. qBT at full ISP speed is usually 5–10× faster than over a tunnel.
+2. **Seeding.** Most VPN providers don't forward inbound ports (NordVPN, ProtonVPN free, Surfshark, IVPN, AirVPN, Windscribe). With qBT tunneled, you can still *connect* to peers but they can't connect back — seeding becomes outgoing-only and tracker stats stay near zero. Mullvad forwards by default; ProtonVPN paid does on opt-in.
+3. **Indexer cover is independent.** Your Prowlarr indexer browsing is hidden by gluetun *regardless* of qBT's routing. The thing your ISP can fingerprint — what trackers you're searching — is already covered.
+
+**Opt into tunneled mode** if you specifically need qBT's IP hidden from peers and you accept the speed/seeding hit. Setup writes the right `COMPOSE_FILE` overlay (`docker-compose.qbt-vpn.yml`) so docker compose picks it up automatically. Switch any time with `./setup --reconfigure`.
+
+`./check` knows which mode you're in and inverts its assertion accordingly: in direct mode it requires the prowlarr and qbittorrent IPs to *differ*; in tunneled mode it requires them to *match*.
 
 ## Something broken?
 

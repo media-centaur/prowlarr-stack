@@ -76,7 +76,7 @@ printf '\n\033[1mprowlarr-stack bootstrap\033[0m\n'
 
 # --- prereq check ---
 info "checking prerequisites..."
-for cmd in curl tar sha256sum docker; do
+for cmd in curl tar sha256sum docker findmnt; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     die "$cmd is required but not installed"
   fi
@@ -87,7 +87,10 @@ fi
 if ! command -v sqlite3 >/dev/null 2>&1; then
   die "sqlite3 not installed (try: pacman -S sqlite or apt install sqlite3)"
 fi
-ok "docker, compose, sqlite3, curl, tar, sha256sum"
+if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user --version >/dev/null 2>&1; then
+  die "systemctl --user must work (the installer enables a user-scope unit for autostart on reboot)"
+fi
+ok "docker, compose, sqlite3, curl, tar, sha256sum, findmnt, systemctl --user"
 
 # --- install dir handling ---
 if [ -e "$DIR" ] && [ "$FORCE" -ne 1 ]; then

@@ -4,6 +4,10 @@ Technical details for curious users and contributors. If you just want to instal
 
 ## Traffic routing
 
+The stack supports two qBittorrent topologies, picked at install time and persisted in `.env` via `QBITTORRENT_USE_VPN`.
+
+**Direct mode (default, `QBITTORRENT_USE_VPN=0`)** — qBittorrent runs on the docker bridge, outside the tunnel:
+
 | Traffic                            | Route                                  |
 | ---------------------------------- | -------------------------------------- |
 | Prowlarr indexer lookups           | VPN tunnel (WireGuard via gluetun)     |
@@ -12,11 +16,25 @@ Technical details for curious users and contributors. If you just want to instal
 | qBittorrent peer swarm             | Direct ISP                             |
 | qBittorrent tracker announce       | Direct ISP                             |
 
-The split is deliberate: indexer searches go through the VPN so they aren't visible to your ISP, while downloads stay on the direct path to avoid paying VPN-throughput overhead on every byte.
+This split is the recommended default: indexer searches go through the VPN so they aren't visible to your ISP, while downloads stay on the direct path to avoid paying VPN-throughput overhead on every byte. Most VPN providers also don't forward inbound ports — direct mode keeps qBittorrent able to seed.
 
-**Kill-switch.** Gluetun's default firewall drops any egress that isn't through the tunnel. If the tunnel drops, Prowlarr and FlareSolverr lose all internet connectivity until it recovers — they don't fall through to the ISP path. qBittorrent is unaffected because it never used the tunnel in the first place.
+**Tunneled mode (opt-in, `QBITTORRENT_USE_VPN=1`)** — qBittorrent joins gluetun's network namespace:
+
+| Traffic                            | Route                                  |
+| ---------------------------------- | -------------------------------------- |
+| Prowlarr indexer lookups           | VPN tunnel                             |
+| FlareSolverr Cloudflare challenges | VPN tunnel                             |
+| Prowlarr → qBittorrent API push    | localhost (shared netns, no LAN hop)   |
+| qBittorrent peer swarm             | VPN tunnel                             |
+| qBittorrent tracker announce       | VPN tunnel                             |
+
+In tunneled mode qBittorrent's host-facing ports (8080/6881) are published by gluetun rather than qBittorrent itself — this is required because a container with `network_mode: "service:gluetun"` cannot publish its own ports.
+
+**Kill-switch.** Gluetun's default firewall drops any egress that isn't through the tunnel. If the tunnel drops, Prowlarr and FlareSolverr lose all internet connectivity until it recovers — they don't fall through to the ISP path. In direct mode, qBittorrent is unaffected because it never used the tunnel. In tunneled mode, qBittorrent is also covered by the kill-switch — when the tunnel drops, qBT's traffic is dropped too, which is the whole point of opting in.
 
 ## Container topology
+
+**Direct mode (default):**
 
 ```
 ┌──────────────────────────── host ────────────────────────────┐
@@ -38,11 +56,33 @@ The split is deliberate: indexer searches go through the VPN so they aren't visi
 
 `qbittorrent` is on the default Docker bridge, reachable at the host's LAN IP on ports 8080 (web UI) and 6881 (BitTorrent peers).
 
-## LAN bypass
+**Tunneled mode (`QBITTORRENT_USE_VPN=1`):**
 
-Prowlarr needs to reach qBittorrent's API to push grabs for download. Since Prowlarr is inside the gluetun netns, it can't use Docker's service DNS to resolve `qbittorrent`. Instead, gluetun has an environment variable `FIREWALL_OUTBOUND_SUBNETS=${LAN_SUBNET}` that punches a hole in the kill-switch firewall for your LAN. Prowlarr then reaches qBittorrent at `http://${HOST_LAN_IP}:8080`, and that traffic goes out the LAN interface instead of through the tunnel.
+```
+┌──────────────────────────── host ────────────────────────────┐
+│                                                              │
+│   ┌── gluetun netns ─────────────────────────────────────┐   │
+│   │  gluetun  (WireGuard → VPN)                          │   │
+│   │  ├─ prowlarr    (no ports)                           │   │
+│   │  ├─ flaresolverr (no ports)                          │   │
+│   │  └─ qbittorrent  (no ports)                          │   │
+│   └──────────────────────────────────────────────────────┘   │
+│         │ published on host (all by gluetun):                │
+│         │   9696, 8191, 8080, 6881/tcp, 6881/udp             │
+│         ▼                                                    │
+│       host :9696 :8191 :8080 :6881 (tcp+udp)                 │
+└──────────────────────────────────────────────────────────────┘
+```
 
-`HOST_LAN_IP` and `LAN_SUBNET` are auto-detected by `./setup` but can be overridden at the prompt.
+All three application containers share gluetun's namespace. qBittorrent's host ports (8080, 6881) are published by gluetun rather than qBittorrent itself, since `network_mode: "service:gluetun"` is incompatible with the container publishing its own ports. The `docker-compose.qbt-vpn.yml` overlay clears qBT's `ports:` list (`!reset []`) and adds them to gluetun.
+
+## LAN bypass (direct mode only)
+
+In direct mode, Prowlarr (inside gluetun's netns) needs to reach qBittorrent (on the docker bridge). It can't use Docker's service DNS to resolve `qbittorrent` because gluetun's firewall would drop any egress that isn't either through the tunnel or to the LAN subnet. Gluetun's `FIREWALL_OUTBOUND_SUBNETS=${LAN_SUBNET}` environment variable punches a hole in the kill-switch firewall for your LAN, and Prowlarr reaches qBittorrent at `http://${HOST_LAN_IP}:8080` over the LAN.
+
+In tunneled mode there is no LAN hop — Prowlarr and qBittorrent share the same netns, and Prowlarr reaches qBittorrent at `http://127.0.0.1:8080`. `./setup` writes whichever host the chosen mode requires into Prowlarr's `DownloadClients` row.
+
+`HOST_LAN_IP` and `LAN_SUBNET` are auto-detected by `./setup` but can be overridden at the prompt. They're still required in tunneled mode (gluetun uses `LAN_SUBNET` for its kill-switch carve-out, and the systemd unit and verification path use `HOST_LAN_IP`).
 
 ## File layout
 
@@ -52,7 +92,8 @@ prowlarr-stack/
 ├── setup                    # interactive installer
 ├── check                    # standalone VPN-isolation verifier
 ├── update                   # one-command upgrade (source + images)
-├── docker-compose.yml       # 4 services: gluetun, prowlarr, flaresolverr, qbittorrent
+├── docker-compose.yml          # 4 services: gluetun, prowlarr, flaresolverr, qbittorrent (direct mode default)
+├── docker-compose.qbt-vpn.yml  # overlay: routes qBittorrent through gluetun (tunneled mode)
 ├── .env                     # generated by setup (gitignored, chmod 600)
 ├── .env.example             # template with blanks
 ├── scripts/
@@ -75,16 +116,16 @@ prowlarr-stack/
 
 `./setup` runs these in order. Any failure stops the script with a precise error message.
 
-1. **Prerequisites** — docker, docker compose, sqlite3, python3, the `ip` command.
-2. **Configuration** — VPN provider, WireGuard key (with provider-specific hints), optional `WIREGUARD_ADDRESSES` and `WIREGUARD_PRESHARED_KEY`, exit country, host LAN IP, LAN subnet, `DOWNLOADS_DIR`, `COMPLETED_DIR`. Auto-detects LAN values; validates each input before accepting.
-3. **Write `.env`** — atomic (tmp file + rename), `chmod 600` before rename.
+1. **Prerequisites** — docker, docker compose, sqlite3, python3, the `ip` command, `findmnt` (util-linux, used by storage path validation), `systemctl --user` (the installer enables a user-scope unit for autostart on reboot).
+2. **Configuration** — VPN provider, WireGuard key (with provider-specific hints), optional `WIREGUARD_ADDRESSES` and `WIREGUARD_PRESHARED_KEY`, exit country, host LAN IP, LAN subnet, `DOWNLOADS_DIR`, `COMPLETED_DIR`, `QBITTORRENT_USE_VPN` (direct vs. tunneled qBT routing — see [Traffic routing](#traffic-routing)). Auto-detects LAN values; validates each input before accepting.
+3. **Write `.env`** — atomic (tmp file + rename), `chmod 600` before rename. Also writes `COMPOSE_FILE` so docker compose picks up the right overlay (`docker-compose.yml` alone in direct mode, `docker-compose.yml:docker-compose.qbt-vpn.yml` in tunneled mode).
 4. **Seed `config/`** — copy from `defaults/` if the destination doesn't exist (idempotent; re-runs don't clobber state).
-5. **Patch `prowlarr.db`** — rewrites the qBittorrent download-client row's host + port to point at `${HOST_LAN_IP}:8080`. Uses SQLite's `json_set`, so it's idempotent.
-6. **Storage paths** — `validate_storage_paths` checks each of `DOWNLOADS_DIR` / `COMPLETED_DIR`: must exist as a directory and (unless `ALLOW_NON_MOUNTPOINT=1`) must be a real kernel mountpoint. In interactive mode, offers to opt into `ALLOW_NON_MOUNTPOINT=1` if a path is a plain dir; in `--non-interactive` mode (used by `restore`), hard-fails. The systemd unit gets `RequiresMountsFor=` for these paths unless the opt-out is active.
+5. **Patch `prowlarr.db`** — rewrites the qBittorrent download-client row's host + port. Direct mode uses `${HOST_LAN_IP}:8080`; tunneled mode uses `127.0.0.1:8080` (since prowlarr and qBT share gluetun's netns). Uses SQLite's `json_set`, so it's idempotent.
+6. **Storage paths** — `validate_storage_paths` checks each of `DOWNLOADS_DIR` / `COMPLETED_DIR` via `findmnt --target`: each must exist as a directory and (unless `ALLOW_NON_MOUNTPOINT=1`) must live on a mount that isn't `/`. Subdirectories of a mount count — `/mnt/videos/downloads` inside a `/mnt/videos` mount is fine. In interactive mode, offers to opt into `ALLOW_NON_MOUNTPOINT=1` if a path is on the root fs; in `--non-interactive` mode (used by `restore`), hard-fails. The systemd unit gets `RequiresMountsFor=` for these paths unless the opt-out is active.
 7. **Systemd user service** — installs `~/.config/systemd/user/prowlarr-stack.service`, runs `daemon-reload + enable`.
 8. **Start** — `docker compose up -d`.
 9. **Wait for tunnel** — polls gluetun's healthcheck until green (60s timeout).
-10. **Verify isolation** — fetches the external IP from inside `prowlarr` and `qbittorrent` via `api.ipify.org`, confirms they differ. Dumps gluetun's recent log on failure.
+10. **Verify isolation** — fetches the external IP from inside `prowlarr` and `qbittorrent` via `api.ipify.org`. In direct mode, the two IPs must *differ* (same IP means prowlarr is leaking past the VPN). In tunneled mode, they must *match* (different IPs means qBT escaped the tunnel). Dumps gluetun's recent log on failure.
 
 `./setup --reconfigure` forces the configuration prompts to re-appear (existing values shown as defaults). `./setup --non-interactive` skips prompts and fails fast on any missing required variable — used by `./update`.
 
@@ -171,7 +212,7 @@ Every install writes `MANIFEST` at the install root — a plain-text inventory o
 - The pinned upstream Docker images.
 - Container names.
 - Docker network name.
-- External paths *referenced* by the stack but *not owned* (your media dirs under `/mnt/videos`).
+- External paths *referenced* by the stack but *not owned* (your `DOWNLOADS_DIR` and `COMPLETED_DIR`).
 
 `./uninstall` reads MANIFEST and removes exactly what's listed. If MANIFEST is missing, it falls back to a best-effort removal based on hardcoded defaults and warns the user.
 

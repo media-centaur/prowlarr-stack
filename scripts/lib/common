@@ -324,6 +324,36 @@ check_ip_command() {
   return 1
 }
 
+# findmnt drives the storage path validation (validate_storage_paths,
+# wait-for-mount). Always present on modern Linux as part of util-linux,
+# but check anyway so a missing util-linux fails loudly instead of leaving
+# the mount checks silently broken.
+check_findmnt() {
+  if command -v findmnt >/dev/null 2>&1; then
+    log_ok "findmnt" "util-linux"
+    return 0
+  fi
+  log_fail "findmnt" "not installed — pacman -S util-linux | apt install util-linux"
+  return 1
+}
+
+# systemctl --user must be functional: the installer enables a user-scope
+# unit so the stack autostarts on reboot. If user-systemd is missing
+# (containers / minimal envs), surface that up front rather than failing
+# halfway through Phase 8 of setup.
+check_systemd_user() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    log_fail "systemctl" "not installed — systemd is required for autostart on reboot"
+    return 1
+  fi
+  if ! systemctl --user --version >/dev/null 2>&1; then
+    log_fail "systemctl --user" "user-scope systemd unavailable (no XDG_RUNTIME_DIR or systemd not running?)"
+    return 1
+  fi
+  log_ok "systemctl --user" "available"
+  return 0
+}
+
 # run_prereqs — runs all prereq checks and returns non-zero if any failed.
 # Storage path checks live in validate_storage_paths and run AFTER configuration
 # (so we can validate the user's chosen paths, not a hardcoded location).
@@ -334,6 +364,8 @@ run_prereqs() {
   check_sqlite3 || all_ok=1
   check_python3 || all_ok=1
   check_ip_command || all_ok=1
+  check_findmnt || all_ok=1
+  check_systemd_user || all_ok=1
   return $all_ok
 }
 
@@ -574,12 +606,18 @@ fetch_container_external_ip() {
 }
 
 # verify_isolation
-# Returns 0 if prowlarr's external IP differs from qbittorrent's (→ VPN isolating traffic).
-# Returns 1 if they match (leak) or either fetch fails.
-# Prints a labeled report.
+# Reads QBITTORRENT_USE_VPN from .env to know which topology to assert:
+#   - direct mode (default): prowlarr and qBT MUST have different external IPs
+#     (same IP → prowlarr is leaking past the VPN).
+#   - VPN mode: prowlarr and qBT MUST have the SAME external IP (different IPs
+#     → qBT escaped the tunnel somehow).
+# Returns 0 if the topology check passes, 1 if it fails or either fetch errors.
 verify_isolation() {
-  local prowlarr_ip qbt_ip
+  local prowlarr_ip qbt_ip qbt_uses_vpn
   log_phase "verification"
+
+  qbt_uses_vpn=$(read_env_value .env QBITTORRENT_USE_VPN 2>/dev/null)
+  [[ -z "$qbt_uses_vpn" ]] && qbt_uses_vpn=0
 
   if ! prowlarr_ip=$(fetch_container_external_ip prowlarr); then
     log_fail "prowlarr external IP" "unreachable — gluetun tunnel down?"
@@ -594,14 +632,23 @@ verify_isolation() {
   fi
   log_ok "qbittorrent external IP" "$qbt_ip"
 
-  if [[ "$prowlarr_ip" == "$qbt_ip" ]]; then
-    log_fail "isolation" "FAIL — same IP on both; tunnel not isolating traffic"
-    log_info "last 20 lines of gluetun log:"
-    docker logs --tail 20 gluetun 2>&1 | sed 's/^/      /' >&2
-    return 1
+  if [[ "$qbt_uses_vpn" == "1" ]]; then
+    if [[ "$prowlarr_ip" != "$qbt_ip" ]]; then
+      log_fail "isolation" "FAIL — VPN mode active but qBT IP differs from prowlarr; qBT is not in the tunnel"
+      log_info "last 20 lines of gluetun log:"
+      docker logs --tail 20 gluetun 2>&1 | sed 's/^/      /' >&2
+      return 1
+    fi
+    log_ok "isolation" "VPN mode: both via gluetun ($prowlarr_ip)"
+  else
+    if [[ "$prowlarr_ip" == "$qbt_ip" ]]; then
+      log_fail "isolation" "FAIL — same IP on both; tunnel not isolating traffic"
+      log_info "last 20 lines of gluetun log:"
+      docker logs --tail 20 gluetun 2>&1 | sed 's/^/      /' >&2
+      return 1
+    fi
+    log_ok "isolation" "direct mode: prowlarr via VPN ($prowlarr_ip), qBT direct ($qbt_ip)"
   fi
-
-  log_ok "isolation" "verified ($prowlarr_ip ≠ $qbt_ip)"
   return 0
 }
 

@@ -59,6 +59,8 @@ downloads_dir=$(read_env_value "$ENV_FILE" DOWNLOADS_DIR)
 completed_dir=$(read_env_value "$ENV_FILE" COMPLETED_DIR)
 allow_non_mountpoint=$(read_env_value "$ENV_FILE" ALLOW_NON_MOUNTPOINT)
 [[ -z "$allow_non_mountpoint" ]] && allow_non_mountpoint=0
+qbt_use_vpn=$(read_env_value "$ENV_FILE" QBITTORRENT_USE_VPN)
+[[ -z "$qbt_use_vpn" ]] && qbt_use_vpn=0
 
 # Provider selection (first, since it drives what else we ask for).
 provider=$(read_env_value "$ENV_FILE" VPN_SERVICE_PROVIDER)
@@ -179,6 +181,33 @@ fi
 [[ "$completed_dir" = /* ]] || die "COMPLETED_DIR must be an absolute path: $completed_dir"
 [[ "$downloads_dir" != "$completed_dir" ]] || die "DOWNLOADS_DIR and COMPLETED_DIR must be different paths"
 
+# qBittorrent network mode — direct via ISP (default, recommended) or
+# tunneled through gluetun. The recommendation is direct because:
+#   - downloads run at full ISP speed (VPN tunnels cap bandwidth + add latency)
+#   - inbound peer connections work, so seeding actually works
+#   - your indexer browsing in Prowlarr is still hidden by gluetun either way
+# Tunneling qBT only helps if you specifically need qBT's IP hidden from
+# peers, and you accept the speed hit + (for most providers) the loss of
+# inbound peers, which makes seeding outgoing-only.
+if [[ -z "$(read_env_value "$ENV_FILE" QBITTORRENT_USE_VPN)" || $RECONFIGURE -eq 1 ]]; then
+  if [[ $NONINTERACTIVE -eq 0 ]]; then
+    echo ""
+    log_info "qBittorrent network routing"
+    log_info "  ${COLOR_BOLD}Direct (recommended):${COLOR_RESET} qBT goes via your ISP — full speed, full"
+    log_info "    peer connectivity for seeding. Your Prowlarr indexer browsing is still"
+    log_info "    routed through the VPN regardless of this choice."
+    log_info "  ${COLOR_BOLD}Tunneled:${COLOR_RESET} qBT shares gluetun's namespace. Your IP is hidden from"
+    log_info "    peers, BUT downloads are capped at VPN speed and most providers don't"
+    log_info "    forward inbound ports — seeding becomes outgoing-only."
+    if prompt_yes_no "Route qBittorrent through the VPN tunnel?" n; then
+      qbt_use_vpn=1
+    else
+      qbt_use_vpn=0
+    fi
+  fi
+fi
+case "$qbt_use_vpn" in 0|1) ;; *) die "QBITTORRENT_USE_VPN must be 0 or 1 (got: $qbt_use_vpn)" ;; esac
+
 # --- Phase 3: write .env ---
 log_phase "writing .env"
 write_env_value "$ENV_FILE" VPN_SERVICE_PROVIDER "$provider"
@@ -191,6 +220,14 @@ write_env_value "$ENV_FILE" LAN_SUBNET "$lan_subnet"
 write_env_value "$ENV_FILE" DOWNLOADS_DIR "$downloads_dir"
 write_env_value "$ENV_FILE" COMPLETED_DIR "$completed_dir"
 write_env_value "$ENV_FILE" ALLOW_NON_MOUNTPOINT "$allow_non_mountpoint"
+write_env_value "$ENV_FILE" QBITTORRENT_USE_VPN "$qbt_use_vpn"
+# COMPOSE_FILE is read by docker compose itself from .env — every `docker
+# compose` invocation in this dir picks up the right overlay automatically.
+if [[ "$qbt_use_vpn" == "1" ]]; then
+  write_env_value "$ENV_FILE" COMPOSE_FILE "docker-compose.yml:docker-compose.qbt-vpn.yml"
+else
+  write_env_value "$ENV_FILE" COMPOSE_FILE "docker-compose.yml"
+fi
 log_ok ".env" "written (chmod 600)"
 
 # direnv integration (opt-in).
@@ -247,10 +284,15 @@ else
 fi
 
 # --- Phase 6: patch Prowlarr DB ---
-log_phase "patching prowlarr.db → qbittorrent@${lan_ip}:8080"
+# In VPN mode prowlarr and qBittorrent share gluetun's network namespace, so
+# prowlarr reaches qBT via 127.0.0.1. In direct mode they're on different
+# networks; prowlarr reaches qBT via the host's LAN IP.
+qbt_host="$lan_ip"
+[[ "$qbt_use_vpn" == "1" ]] && qbt_host="127.0.0.1"
+log_phase "patching prowlarr.db → qbittorrent@${qbt_host}:8080"
 if [[ -f config/prowlarr/prowlarr.db ]]; then
-  printf '%s' "$qbt_pw" | ./scripts/patch-prowlarr-db config/prowlarr/prowlarr.db "$lan_ip" 8080 -
-  log_ok "prowlarr.db" "download-client host = $lan_ip, password synced"
+  printf '%s' "$qbt_pw" | ./scripts/patch-prowlarr-db config/prowlarr/prowlarr.db "$qbt_host" 8080 -
+  log_ok "prowlarr.db" "download-client host = $qbt_host, password synced"
 else
   log_warn "config/prowlarr/prowlarr.db not present — skipping patch"
 fi

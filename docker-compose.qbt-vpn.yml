@@ -1,0 +1,30 @@
+# Compose overlay applied when QBITTORRENT_USE_VPN=1: routes qBittorrent
+# through the gluetun tunnel by sharing its network namespace. Activated via
+# COMPOSE_FILE in .env, which ./setup writes when you opt into VPN-routed
+# downloads.
+#
+# Trade-off vs. the default (qBT direct):
+#   - downloads inherit VPN speed instead of full ISP speed.
+#   - most VPN providers don't forward inbound ports — qBittorrent becomes
+#     connect-only, so outgoing peers still work but inbound peers are
+#     blocked, which limits seeding. Mullvad forwards by default; ProtonVPN
+#     paid does on opt-in; NordVPN, Surfshark, IVPN, AirVPN, Windscribe do
+#     not.
+services:
+  gluetun:
+    # qBittorrent can't publish its own ports while inheriting another
+    # container's network namespace, so we add them here.
+    ports:
+      - "8080:8080"        # qBittorrent WebUI
+      - "6881:6881"        # BitTorrent peer port (TCP)
+      - "6881:6881/udp"    # BitTorrent peer port (UDP / DHT)
+
+  qbittorrent:
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    # `!reset []` is the Compose Specification syntax for "clear this list".
+    # Without it, the base file's qBT ports merge in and docker rejects the
+    # service spec (ports + network_mode are mutually exclusive).
+    ports: !reset []
