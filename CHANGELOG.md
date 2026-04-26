@@ -9,6 +9,16 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.4.4] - 2026-04-26
+
+### Fixed
+- The bundled FlareSolverr indexer proxy now points at
+  `http://localhost:8191/` instead of `http://flaresolverr:8191/`, so
+  test-connect works out of the box. Because `prowlarr` and
+  `flaresolverr` share gluetun's network namespace
+  (`network_mode: "service:gluetun"`), Docker's service-name DNS does
+  not resolve between them — `localhost` is the only reachable host.
+
 ## [0.4.3] - 2026-04-26
 
 ### Fixed
