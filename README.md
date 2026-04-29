@@ -55,6 +55,8 @@ When it's done:
 
 Full per-provider credential-extraction steps: [docs/providers.md](docs/providers.md).
 
+How to add and tune your indexers (and which ones to disable when searches feel slow): [docs/indexers.md](docs/indexers.md).
+
 ## Update
 
 ```sh
