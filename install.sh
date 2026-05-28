@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # prowlarr-stack bootstrap installer.
-# Audit with:  curl -fsSL https://raw.githubusercontent.com/media-centarr/prowlarr-stack/main/install.sh | less
+# Audit with:  curl -fsSL https://raw.githubusercontent.com/media-centaur/prowlarr-stack/main/install.sh | less
 #
 # Flow: prereq check → resolve latest release → download tarball + SHA256SUMS →
 #       verify → validate archive safety → extract → exec ./install.
 set -eu
 
-REPO="media-centarr/prowlarr-stack"
+REPO="media-centaur/prowlarr-stack"
 API_ROOT="https://api.github.com/repos/$REPO/releases"
 DL_ROOT="https://github.com/$REPO/releases/download"
 DEFAULT_DIR="$HOME/prowlarr-stack"

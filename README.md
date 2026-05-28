@@ -27,7 +27,7 @@ Good for building a library of freely-licensed material — Blender Foundation o
 **One-liner:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/media-centarr/prowlarr-stack/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/media-centaur/prowlarr-stack/main/install.sh | sh
 ```
 
 Downloads the latest release, verifies its SHA256 checksum, extracts it to `~/prowlarr-stack`, and runs the interactive setup.
@@ -35,12 +35,12 @@ Downloads the latest release, verifies its SHA256 checksum, extracts it to `~/pr
 Want to read the script first? Same URL, just pipe to `less`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/media-centarr/prowlarr-stack/main/install.sh | less
+curl -fsSL https://raw.githubusercontent.com/media-centaur/prowlarr-stack/main/install.sh | less
 ```
 
 **Or: download + verify by hand:**
 
-1. Grab the latest `prowlarr-stack-vX.Y.Z.tar.gz` and `SHA256SUMS` from the [Releases page](https://github.com/media-centarr/prowlarr-stack/releases).
+1. Grab the latest `prowlarr-stack-vX.Y.Z.tar.gz` and `SHA256SUMS` from the [Releases page](https://github.com/media-centaur/prowlarr-stack/releases).
 2. `sha256sum -c SHA256SUMS`
 3. `tar xf prowlarr-stack-vX.Y.Z.tar.gz && cd prowlarr-stack-vX.Y.Z`
 4. `./install`
@@ -111,7 +111,7 @@ qBittorrent password against the new IP, and re-runs `./check`.
 **Restore as part of a clean install (one shot):**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/media-centarr/prowlarr-stack/main/install.sh | sh -s -- --restore /path/to/backup.tar.gz
+curl -fsSL https://raw.githubusercontent.com/media-centaur/prowlarr-stack/main/install.sh | sh -s -- --restore /path/to/backup.tar.gz
 ```
 
 The bootstrap downloads the latest release, extracts it, and hands off

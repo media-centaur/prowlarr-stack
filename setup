@@ -334,7 +334,7 @@ STACK_DIR="$(pwd)"
 SERVICE_DIR="$HOME/.config/systemd/user"
 SERVICE_FILE="$SERVICE_DIR/prowlarr-stack.service"
 mkdir -p "$SERVICE_DIR"
-sed "s|/path/to/media-centarr/prowlarr-stack|$STACK_DIR|g" \
+sed "s|/path/to/media-centaur/prowlarr-stack|$STACK_DIR|g" \
   defaults/prowlarr-stack.service > "$SERVICE_FILE"
 
 # Add RequiresMountsFor under [Unit] when the paths are real kernel mountpoints.
@@ -394,7 +394,7 @@ fi
 
 echo ""
 echo ""
-echo "${COLOR_BOLD}${COLOR_GREEN}done.${COLOR_RESET}  record these for your media-centarr download-client config:"
+echo "${COLOR_BOLD}${COLOR_GREEN}done.${COLOR_RESET}  record these for your media-centaur download-client config:"
 echo ""
 echo "  ${COLOR_BOLD}Prowlarr${COLOR_RESET}"
 echo "    URL       http://${lan_ip}:9696"
