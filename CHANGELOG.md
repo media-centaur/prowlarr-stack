@@ -9,6 +9,17 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.4.6] - 2026-06-26
+
+### Changed
+- Bumped all pinned upstream container images to current releases:
+  gluetun `v3.40.0` → `v3.41.1`, Prowlarr `2.3.5.5327-ls142` →
+  `2.4.0.5397-ls151`, FlareSolverr `v3.4.6` → `v3.5.0`, and qBittorrent
+  `5.1.4-r3-ls451` → `5.2.2_v2.0.13-ls463`. qBittorrent stays on the
+  libtorrent v2 line (matching the prior Alpine-packaged build) so
+  existing `.fastresume` data remains compatible. Run `./update` to pull
+  the new images.
+
 ## [0.4.5] - 2026-04-26
 
 ### Changed
