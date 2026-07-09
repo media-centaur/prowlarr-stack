@@ -9,6 +9,35 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.5.0] - 2026-07-09
+
+### Added
+- Stack migration framework (`migrations/`, `scripts/run-migrations`):
+  idempotent, versioned fixups applied automatically during `./update` (both
+  release and dev modes). A fresh install baselines the current set so it never
+  replays history; existing installs run pending migrations on next update.
+- Migration `0001-flaresolverr-orphan-tags`: clears orphaned FlareSolverr proxy
+  tags so Prowlarr routes Cloudflare-gated indexers through the solver.
+- Transactional release upgrades: pre-flight backup → migrate → verify (gluetun
+  health + VPN isolation) → **auto-rollback** to the prior release on failure.
+  `--no-rollback` to opt out; optional `UPDATE_NOTIFY_CMD` in `.env` for failure
+  notification.
+- Opt-in weekly unattended upgrades via a systemd user timer
+  (`./update --enable-auto` / `--disable-auto`).
+
+### Changed
+
+### Fixed
+- The default seed DB (`defaults/prowlarr/prowlarr.db`) shipped the FlareSolverr
+  indexer proxy tagged `[1]` with an empty Tags table, so every fresh install
+  started with the proxy scoped to a nonexistent tag — Prowlarr never used
+  FlareSolverr and Cloudflare-gated indexer tests failed with "blocked by
+  CloudFlare Protection". Cleared the orphan; migration `0001` repairs existing
+  installs.
+- Release-mode `update` cleanup: the `$tmp` temp dir is now global so the EXIT
+  trap can remove it (previously a `local` left it unbound at script exit under
+  `set -u`).
+
 ## [0.4.6] - 2026-06-26
 
 ### Changed
