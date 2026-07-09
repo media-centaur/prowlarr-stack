@@ -10,7 +10,7 @@ RemainAfterExit=yes
 #   WorkingDirectory=%h/src/media-centaur/prowlarr-stack
 WorkingDirectory=/path/to/media-centaur/prowlarr-stack
 ExecStartPre=/path/to/media-centaur/prowlarr-stack/scripts/wait-for-mount
-ExecStart=/usr/bin/docker compose up -d
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
 ExecStop=/usr/bin/docker compose down
 TimeoutStartSec=360
 

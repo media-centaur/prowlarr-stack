@@ -67,7 +67,7 @@ log_info "install directory:  $INSTALL_DIR"
 
 echo ""
 echo "Will remove:"
-echo "  • containers: gluetun, prowlarr, flaresolverr, qbittorrent"
+echo "  • containers: gluetun, prowlarr, byparr, qbittorrent"
 echo "  • docker networks: $(basename "$INSTALL_DIR")_default"
 echo "  • systemd user unit: $HOME/.config/systemd/user/prowlarr-stack.service"
 echo "  • install dir: $INSTALL_DIR (includes .env with VPN credentials)"
@@ -138,7 +138,7 @@ if [[ $PURGE_IMAGES -eq 1 ]]; then
       fi
     done < <(parse_manifest_images "$MANIFEST")
   else
-    for img in qmcgaw/gluetun linuxserver/prowlarr ghcr.io/flaresolverr/flaresolverr linuxserver/qbittorrent; do
+    for img in qmcgaw/gluetun linuxserver/prowlarr ghcr.io/thephaseless/byparr linuxserver/qbittorrent; do
       docker images -q "$img" | xargs -r docker rmi 2>/dev/null || true
     done
     log_warn "best-effort image removal (MANIFEST was missing)"

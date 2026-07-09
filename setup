@@ -362,7 +362,11 @@ log_phase "starting stack"
 # container's mount, and a plain `docker compose up -d` is a no-op because
 # the container exists. Without --force-recreate, Prowlarr writes its API
 # key into a phantom directory that no longer exists on the host.
-docker compose up -d --force-recreate
+# --remove-orphans drops containers for services no longer in the compose file
+# (e.g. the old `flaresolverr` container after the byparr rename). Safe here:
+# docker reads the full active set from COMPOSE_FILE in .env, so the qbt-vpn
+# overlay's containers are part of the project, not orphans.
+docker compose up -d --force-recreate --remove-orphans
 log_ok "containers" "started (recreated for fresh bind mounts)"
 
 # --- Phase 10: wait for tunnel ---

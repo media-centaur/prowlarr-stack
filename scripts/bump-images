@@ -15,7 +15,7 @@ log_phase "bump-images"
 REPOS=(
   "qmcgaw/gluetun"
   "linuxserver/prowlarr"
-  "ghcr.io/flaresolverr/flaresolverr"
+  "ghcr.io/thephaseless/byparr"
   "linuxserver/qbittorrent"
 )
 

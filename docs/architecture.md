@@ -11,7 +11,7 @@ The stack supports two qBittorrent topologies, picked at install time and persis
 | Traffic                            | Route                                  |
 | ---------------------------------- | -------------------------------------- |
 | Prowlarr indexer lookups           | VPN tunnel (WireGuard via gluetun)     |
-| FlareSolverr Cloudflare challenges | VPN tunnel (WireGuard via gluetun)     |
+| byparr Cloudflare challenges       | VPN tunnel (WireGuard via gluetun)     |
 | Prowlarr → qBittorrent API push    | LAN (gluetun firewall bypass)          |
 | qBittorrent peer swarm             | Direct ISP                             |
 | qBittorrent tracker announce       | Direct ISP                             |
@@ -23,14 +23,14 @@ This split is the recommended default: indexer searches go through the VPN so th
 | Traffic                            | Route                                  |
 | ---------------------------------- | -------------------------------------- |
 | Prowlarr indexer lookups           | VPN tunnel                             |
-| FlareSolverr Cloudflare challenges | VPN tunnel                             |
+| byparr Cloudflare challenges       | VPN tunnel                             |
 | Prowlarr → qBittorrent API push    | localhost (shared netns, no LAN hop)   |
 | qBittorrent peer swarm             | VPN tunnel                             |
 | qBittorrent tracker announce       | VPN tunnel                             |
 
 In tunneled mode qBittorrent's host-facing ports (8080/6881) are published by gluetun rather than qBittorrent itself — this is required because a container with `network_mode: "service:gluetun"` cannot publish its own ports.
 
-**Kill-switch.** Gluetun's default firewall drops any egress that isn't through the tunnel. If the tunnel drops, Prowlarr and FlareSolverr lose all internet connectivity until it recovers — they don't fall through to the ISP path. In direct mode, qBittorrent is unaffected because it never used the tunnel. In tunneled mode, qBittorrent is also covered by the kill-switch — when the tunnel drops, qBT's traffic is dropped too, which is the whole point of opting in.
+**Kill-switch.** Gluetun's default firewall drops any egress that isn't through the tunnel. If the tunnel drops, Prowlarr and byparr lose all internet connectivity until it recovers — they don't fall through to the ISP path. In direct mode, qBittorrent is unaffected because it never used the tunnel. In tunneled mode, qBittorrent is also covered by the kill-switch — when the tunnel drops, qBT's traffic is dropped too, which is the whole point of opting in.
 
 ## Container topology
 
@@ -42,17 +42,17 @@ In tunneled mode qBittorrent's host-facing ports (8080/6881) are published by gl
 │   ┌── gluetun netns ────────────┐    ┌── docker bridge ──┐   │
 │   │  gluetun  (WireGuard → VPN) │    │                   │   │
 │   │  ├─ prowlarr    (no ports)  │    │   qbittorrent     │   │
-│   │  └─ flaresolverr (no ports) │    │                   │   │
+│   │  └─ byparr (no ports)       │    │                   │   │
 │   └─────────────────────────────┘    └───────────────────┘   │
 │         │ published on host:                    │            │
 │         │   9696 (prowlarr)                     │ 8080, 6881 │
-│         │   8191 (flaresolverr)                 ▼            │
+│         │   8191 (byparr)                       ▼            │
 │         ▼                                                    │
 │       host :9696, :8191                     host :8080, :6881│
 └──────────────────────────────────────────────────────────────┘
 ```
 
-`prowlarr` and `flaresolverr` share gluetun's network namespace (`network_mode: "service:gluetun"`). That means their ports are published by the `gluetun` service, not by themselves — and their egress traffic is routed through gluetun's tunnel.
+`prowlarr` and `byparr` share gluetun's network namespace (`network_mode: "service:gluetun"`). That means their ports are published by the `gluetun` service, not by themselves — and their egress traffic is routed through gluetun's tunnel.
 
 `qbittorrent` is on the default Docker bridge, reachable at the host's LAN IP on ports 8080 (web UI) and 6881 (BitTorrent peers).
 
@@ -64,7 +64,7 @@ In tunneled mode qBittorrent's host-facing ports (8080/6881) are published by gl
 │   ┌── gluetun netns ─────────────────────────────────────┐   │
 │   │  gluetun  (WireGuard → VPN)                          │   │
 │   │  ├─ prowlarr    (no ports)                           │   │
-│   │  ├─ flaresolverr (no ports)                          │   │
+│   │  ├─ byparr (no ports)                                │   │
 │   │  └─ qbittorrent  (no ports)                          │   │
 │   └──────────────────────────────────────────────────────┘   │
 │         │ published on host (all by gluetun):                │
@@ -92,7 +92,7 @@ prowlarr-stack/
 ├── setup                    # interactive installer
 ├── check                    # standalone VPN-isolation verifier
 ├── update                   # one-command upgrade (source + images)
-├── docker-compose.yml          # 4 services: gluetun, prowlarr, flaresolverr, qbittorrent (direct mode default)
+├── docker-compose.yml          # 4 services: gluetun, prowlarr, byparr, qbittorrent (direct mode default)
 ├── docker-compose.qbt-vpn.yml  # overlay: routes qBittorrent through gluetun (tunneled mode)
 ├── .env                     # generated by setup (gitignored, chmod 600)
 ├── .env.example             # template with blanks

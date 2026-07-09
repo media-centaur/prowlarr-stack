@@ -9,6 +9,24 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.6.0] - 2026-07-09
+
+### Changed
+- Replaced FlareSolverr with **byparr** (`ghcr.io/thephaseless/byparr:2.1.0`), a
+  maintained, FlareSolverr-API-compatible Cloudflare solver (same `/v1` API on
+  port 8191). The Prowlarr "FlareSolverr" indexer proxy works unchanged — byparr
+  speaks that protocol. byparr drives a real browser (Camoufox), so the
+  container gets `shm_size: 512mb` and uses noticeably more RAM than FlareSolverr.
+  The solver container is renamed `flaresolverr` → `byparr`; the stack now starts
+  with `docker compose up -d --remove-orphans` (safe: `COMPOSE_FILE` carries the
+  full active set incl. the qbt-vpn overlay) so the old `flaresolverr` container
+  is removed automatically on update.
+
+  Caveat: the solver egresses through gluetun's commercial-VPN/datacenter IP,
+  which 2026-era Cloudflare weights above browser fingerprint. byparr improves
+  odds on easier sites but the hardest indexers (e.g. 1337x) can still time out —
+  the real fix is a residential/mobile egress proxy (byparr `PROXY_SERVER`).
+
 ## [0.5.1] - 2026-07-09
 
 ### Fixed

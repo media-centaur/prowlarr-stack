@@ -48,11 +48,11 @@ Need a paid provider for the actual NZB downloads, plus an indexer (also usually
 
 ### FlareSolverr-protected indexers
 
-Some indexers sit behind Cloudflare's "checking your browser" challenge. Prowlarr can't pass that on its own. The stack runs FlareSolverr as a sidecar that mimics a real browser and forwards the cleared request.
+Some indexers sit behind Cloudflare's "checking your browser" challenge. Prowlarr can't pass that on its own. The stack runs **byparr** (a maintained, FlareSolverr-API-compatible solver) as a sidecar that drives a real browser and forwards the cleared request.
 
-To use it: in Prowlarr, **Settings → Indexers → Add → FlareSolverr**, set the host to `http://flaresolverr:8191`, save. Indexers that need it will pick it up automatically.
+To use it: in Prowlarr, **Settings → Indexers → Add → FlareSolverr** (that's the proxy type byparr implements), set the host to `http://localhost:8191/`, save. Indexers that need it will pick it up automatically.
 
-If a Cloudflare-fronted indexer keeps failing, check `docker logs flaresolverr` — challenge timeouts there are usually the cause.
+If a Cloudflare-fronted indexer keeps failing, check `docker logs byparr` — challenge timeouts there are usually the cause. Note that the solver egresses through gluetun's VPN IP, which Cloudflare treats as low-trust; the hardest sites can time out regardless of solver.
 
 ## Optimizing for speed
 

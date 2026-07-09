@@ -16,7 +16,7 @@ services:
       - TZ=Europe/Amsterdam
     ports:
       - "9696:9696"   # prowlarr (netns-shared)
-      - "8191:8191"   # flaresolverr (netns-shared)
+      - "8191:8191"   # byparr solver (netns-shared)
     healthcheck:
       test: ["CMD", "wget", "-qO-", "--timeout=10", "https://api.ipify.org"]
       interval: 30s
@@ -40,10 +40,17 @@ services:
       - ./config/prowlarr:/config
     restart: "no"
 
-  flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:v3.5.0
-    container_name: flaresolverr
+  byparr:
+    # byparr is a maintained, FlareSolverr-API-compatible Cloudflare solver
+    # (same /v1 endpoint on port 8191). Prowlarr still uses its "FlareSolverr"
+    # indexer-proxy type pointed at http://localhost:8191/ — no Prowlarr change.
+    # It drives a real browser (Camoufox), so it needs more shared memory + RAM
+    # than FlareSolverr did. Note: a commercial-VPN/datacenter exit IP (via
+    # gluetun) is what Cloudflare weights most, so hard sites may still fail.
+    image: ghcr.io/thephaseless/byparr:2.1.0
+    container_name: byparr
     network_mode: "service:gluetun"
+    shm_size: "512mb"
     depends_on:
       gluetun:
         condition: service_healthy

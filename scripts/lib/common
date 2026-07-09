@@ -755,7 +755,7 @@ write_manifest() {
     echo "# Container names created by this stack"
     echo "container:  gluetun"
     echo "container:  prowlarr"
-    echo "container:  flaresolverr"
+    echo "container:  byparr"
     echo "container:  qbittorrent"
     echo ""
     echo "# Docker networks"

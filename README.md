@@ -10,8 +10,8 @@ Indexer queries (and optionally torrent traffic) are routed through a WireGuard 
 | --- | --- |
 | **Prowlarr** | Searches across your chosen indexers (tracker sites) from one place. Has a web UI and an API that other tools can hit. |
 | **qBittorrent** | A BitTorrent client with a web UI. Handles the actual uploads and downloads. |
-| **FlareSolverr** | A helper that solves Cloudflare challenge pages on behalf of Prowlarr, so Prowlarr can reach indexers that use them. |
-| **gluetun** | A VPN gateway container. Routes Prowlarr + FlareSolverr through your VPN provider so your ISP doesn't see which indexers you're browsing. By default qBittorrent runs at full ISP speed outside the VPN — see [qBittorrent network routing](#qbittorrent-network-routing) for the opt-in tunneled mode. |
+| **byparr** | A maintained, FlareSolverr-API-compatible helper that solves Cloudflare challenge pages on behalf of Prowlarr, so Prowlarr can reach indexers that use them. (In Prowlarr you still add a "FlareSolverr" proxy — byparr speaks that protocol.) |
+| **gluetun** | A VPN gateway container. Routes Prowlarr + byparr through your VPN provider so your ISP doesn't see which indexers you're browsing. By default qBittorrent runs at full ISP speed outside the VPN — see [qBittorrent network routing](#qbittorrent-network-routing) for the opt-in tunneled mode. |
 
 Good for building a library of freely-licensed material — Blender Foundation open movies, Internet Archive collections, Academic Torrents research datasets, Creative Commons music — or for curating your own library of content you already own.
 
