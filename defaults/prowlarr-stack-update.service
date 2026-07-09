@@ -1,0 +1,9 @@
+[Unit]
+Description=prowlarr-stack unattended safe upgrade
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# INSTALL_DIR is substituted with the absolute install path by `update --enable-auto`.
+ExecStart=INSTALL_DIR/update --yes
