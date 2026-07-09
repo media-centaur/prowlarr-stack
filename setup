@@ -317,6 +317,12 @@ else
   log_warn "config/prowlarr/prowlarr.db not present — skipping patch"
 fi
 
+# Fresh install seeds from correct defaults, so historical migrations are marked
+# applied (not run). Existing installs upgrading via ./update have no
+# config/.migrations yet, so their migrations run there instead.
+log_phase "migration baseline"
+./scripts/run-migrations --baseline "$(pwd)"
+
 # --- Phase 7: storage path validation ---
 log_phase "storage paths"
 storage_mode="interactive"
