@@ -75,11 +75,12 @@ pre-flight backup (stops stack)  →  swap_to_release(target)  →  restore stat
 Record `prev=$(cat .version)`, then run `./backup --yes --output <rollback-slot>`
 (this stops the stack, replacing the separate stop step, so the SQLite snapshot
 is consistent). The backup already captures `.env` + `config/` at mode 600. The
-rollback slot is written to `$tmp/rollback.tar.gz` for the run and copied to
-`config/.rollback/last.tar.gz` for post-hoc recovery — under `config/` so it
-survives the release swap (which preserves `config/`) and is never wiped.
-Release tarballs on GitHub are immutable, so previous *code* is always
-re-fetchable by version; only mutable state (`config/`, `.env`) needs snapshotting.
+rollback slot is `$tmp/rollback.tar.gz` for the duration of the run — sufficient
+for auto-rollback within the same invocation. (`./backup` also writes a durable
+copy to `$HOME` by default, so a post-hoc manual recovery path exists without a
+dedicated persistent slot.) Release tarballs on GitHub are immutable, so previous
+*code* is always re-fetchable by version; only mutable state (`config/`, `.env`)
+needs snapshotting.
 
 #### A1. Migrations
 
