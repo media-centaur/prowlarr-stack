@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -u
+
+RUNNER="${RUNNER:-scripts/run-migrations}"
+
+# Build a throwaway install root with a migrations/ dir and config/.
+_scaffold() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/config" "$root/migrations"
+  echo "$root"
+}
+
+test_runs_pending_migration() {
+  local root; root=$(_scaffold)
+  cat > "$root/migrations/0001-touch" <<'EOF'
+#!/usr/bin/env bash
+echo ran > "$1/config/ran-0001"
+EOF
+  chmod +x "$root/migrations/0001-touch"
+  "$RUNNER" "$root"
+  [[ -f "$root/config/ran-0001" ]]
+  grep -qxF "0001-touch" "$root/config/.migrations"
+  rm -rf "$root"
+}
+
+test_skips_already_applied() {
+  local root; root=$(_scaffold)
+  cat > "$root/migrations/0001-count" <<'EOF'
+#!/usr/bin/env bash
+echo x >> "$1/config/count"
+EOF
+  chmod +x "$root/migrations/0001-count"
+  "$RUNNER" "$root"
+  "$RUNNER" "$root"   # second run must skip
+  local n; n=$(wc -l < "$root/config/count")
+  [[ "$n" -eq 1 ]]
+  rm -rf "$root"
+}
+
+test_applies_in_numeric_order() {
+  local root; root=$(_scaffold)
+  for id in 0002-b 0001-a 0010-c; do
+    cat > "$root/migrations/$id" <<EOF
+#!/usr/bin/env bash
+echo $id >> "\$1/config/order"
+EOF
+    chmod +x "$root/migrations/$id"
+  done
+  "$RUNNER" "$root"
+  [[ "$(cat "$root/config/order")" == $'0001-a\n0002-b\n0010-c' ]]
+  rm -rf "$root"
+}
+
+test_fails_loud_and_does_not_advance_state() {
+  local root; root=$(_scaffold)
+  cat > "$root/migrations/0001-boom" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "$root/migrations/0001-boom"
+  ! "$RUNNER" "$root" 2>/dev/null
+  ! grep -qxF "0001-boom" "$root/config/.migrations" 2>/dev/null
+  rm -rf "$root"
+}
+
+test_baseline_stamps_without_running() {
+  local root; root=$(_scaffold)
+  cat > "$root/migrations/0001-should-not-run" <<'EOF'
+#!/usr/bin/env bash
+touch "$1/config/SHOULD_NOT_EXIST"
+EOF
+  chmod +x "$root/migrations/0001-should-not-run"
+  "$RUNNER" --baseline "$root"
+  [[ ! -f "$root/config/SHOULD_NOT_EXIST" ]]
+  grep -qxF "0001-should-not-run" "$root/config/.migrations"
+  rm -rf "$root"
+}
+
+test_no_migrations_dir_is_noop() {
+  local root; root=$(mktemp -d); mkdir -p "$root/config"
+  "$RUNNER" "$root"
+  rm -rf "$root"
+}
