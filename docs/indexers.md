@@ -50,9 +50,11 @@ Need a paid provider for the actual NZB downloads, plus an indexer (also usually
 
 Some indexers sit behind Cloudflare's "checking your browser" challenge. Prowlarr can't pass that on its own. The stack runs **byparr** (a maintained, FlareSolverr-API-compatible solver) as a sidecar that drives a real browser and forwards the cleared request.
 
-To use it: in Prowlarr, **Settings → Indexers → Add → FlareSolverr** (that's the proxy type byparr implements), set the host to `http://localhost:8191/`, save. Indexers that need it will pick it up automatically.
+The stack pre-configures the Prowlarr side for you: a **FlareSolverr** indexer proxy (Settings → Indexers) pointed at `http://localhost:8191/`, carrying a tag named **`byparr`**.
 
-If a Cloudflare-fronted indexer keeps failing, check `docker logs byparr` — challenge timeouts there are usually the cause. Note that the solver egresses through gluetun's VPN IP, which Cloudflare treats as low-trust; the hardest sites can time out regardless of solver.
+**You must tag the indexers that need it.** Prowlarr applies an indexer proxy *only* to indexers that share a tag with it — an untagged proxy is used by nothing. So for each Cloudflare-protected indexer: open it in Prowlarr, add the **`byparr`** tag, save. Only tag the ones that actually need it — a tagged indexer routes *all* its searches through the (slower) browser solver, so don't tag indexers that work directly.
+
+If a Cloudflare-fronted indexer keeps failing after tagging, check `docker logs byparr` — you should see "Challenge detected, attempting to solve". Note that the solver egresses through gluetun's VPN IP, which Cloudflare treats as low-trust; the hardest sites can still time out regardless of solver, in which case the fix is a residential/mobile egress proxy (byparr `PROXY_SERVER`).
 
 ## Optimizing for speed
 

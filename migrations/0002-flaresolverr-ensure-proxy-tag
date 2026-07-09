@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# 0002-flaresolverr-ensure-proxy-tag — make sure the Prowlarr FlareSolverr
+# indexer proxy carries at least one VALID tag.
+#
+# Prowlarr applies an indexer proxy ONLY to indexers that share a tag with it;
+# a proxy with no (or only orphaned) tags is applied to nothing, so the solver
+# is never used. (This supersedes 0001, which cleared orphaned tags under the
+# mistaken belief that "no tags = applies to all".) If the FlareSolverr proxy
+# has no valid tag, create a `byparr` tag and attach it — users then tag their
+# Cloudflare-protected indexers with `byparr` to route them through the solver.
+#
+# Idempotent; no-op when the proxy already has a valid tag, when there is no
+# FlareSolverr proxy, or when the DB is absent.
+#
+# Usage: 0002-flaresolverr-ensure-proxy-tag <install_dir>
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=../scripts/lib/common
+source "$here/../scripts/lib/common"
+
+root="${1:?usage: 0002-flaresolverr-ensure-proxy-tag <install_dir>}"
+db="$root/config/prowlarr/prowlarr.db"
+
+if [[ ! -f "$db" ]]; then
+  log_info "no prowlarr.db — skipping (fresh or non-prowlarr install)"
+  exit 0
+fi
+
+nproxy=$(sqlite3 "$db" "SELECT COUNT(*) FROM IndexerProxies WHERE Implementation='FlareSolverr';")
+if [[ "$nproxy" -eq 0 ]]; then
+  log_info "no FlareSolverr proxy — nothing to do"
+  exit 0
+fi
+
+valid=$(sqlite3 "$db" "
+  SELECT COUNT(*) FROM IndexerProxies ip
+  JOIN json_each(ip.Tags) je
+  WHERE ip.Implementation='FlareSolverr' AND je.value IN (SELECT Id FROM Tags);
+")
+if [[ "$valid" -gt 0 ]]; then
+  log_info "FlareSolverr proxy already has a valid tag — leaving it"
+  exit 0
+fi
+
+# Ensure a 'byparr' tag exists, then set it as the proxy's tag (replacing any
+# empty/orphaned value).
+sqlite3 "$db" "INSERT INTO Tags (Label) SELECT 'byparr' WHERE NOT EXISTS (SELECT 1 FROM Tags WHERE Label='byparr');"
+tagid=$(sqlite3 "$db" "SELECT Id FROM Tags WHERE Label='byparr' ORDER BY Id LIMIT 1;")
+sqlite3 "$db" "UPDATE IndexerProxies SET Tags = json_array($tagid) WHERE Implementation='FlareSolverr';"
+
+# verify
+valid=$(sqlite3 "$db" "
+  SELECT COUNT(*) FROM IndexerProxies ip
+  JOIN json_each(ip.Tags) je
+  WHERE ip.Implementation='FlareSolverr' AND je.value IN (SELECT Id FROM Tags);
+")
+[[ "$valid" -gt 0 ]] || die "FlareSolverr proxy still has no valid tag after migration"
+
+log_ok "0002" "FlareSolverr proxy tagged 'byparr' (id $tagid) — tag your CF indexers with it"

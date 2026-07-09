@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -u
+
+MIGRATION="${MIGRATION:-migrations/0002-flaresolverr-ensure-proxy-tag}"
+
+# $1 = Tags rows "id:label;..." ('' for none)
+# $2 = proxy Tags JSON
+# $3 = proxy Implementation (default FlareSolverr)
+_make_db() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/config/prowlarr"
+  local db="$root/config/prowlarr/prowlarr.db"
+  sqlite3 "$db" "CREATE TABLE Tags (Id INTEGER PRIMARY KEY, Label TEXT);"
+  sqlite3 "$db" "CREATE TABLE IndexerProxies (Id INTEGER PRIMARY KEY, Name TEXT, Implementation TEXT, Settings TEXT, ConfigContract TEXT, Tags TEXT);"
+  local IFS=';'
+  for pair in $1; do
+    [[ -z "$pair" ]] && continue
+    sqlite3 "$db" "INSERT INTO Tags (Id, Label) VALUES (${pair%%:*}, '${pair##*:}');"
+  done
+  sqlite3 "$db" "INSERT INTO IndexerProxies (Id, Name, Implementation, Tags) VALUES (1, 'FlareSolverr', '${3:-FlareSolverr}', '$2');"
+  echo "$root"
+}
+
+_db() { echo "$1/config/prowlarr/prowlarr.db"; }
+_byparr_tag_count() { sqlite3 "$(_db "$1")" "SELECT COUNT(*) FROM Tags WHERE Label='byparr';"; }
+# count of proxy tag ids that reference an existing Tags row
+_proxy_valid_tags() {
+  sqlite3 "$(_db "$1")" "SELECT COUNT(*) FROM IndexerProxies ip JOIN json_each(ip.Tags) je WHERE ip.Implementation='FlareSolverr' AND je.value IN (SELECT Id FROM Tags);"
+}
+_proxy_tags_json() { sqlite3 "$(_db "$1")" "SELECT Tags FROM IndexerProxies WHERE Id=1;"; }
+
+test_empty_tags_gets_byparr_tag() {
+  local root; root=$(_make_db "" "[]")
+  "$MIGRATION" "$root"
+  [[ "$(_byparr_tag_count "$root")" -eq 1 ]]
+  [[ "$(_proxy_valid_tags "$root")" -ge 1 ]]
+  rm -rf "$root"
+}
+
+test_orphaned_tag_replaced_with_valid() {
+  local root; root=$(_make_db "" "[99]")   # references nonexistent tag 99
+  "$MIGRATION" "$root"
+  [[ "$(_byparr_tag_count "$root")" -eq 1 ]]
+  [[ "$(_proxy_valid_tags "$root")" -ge 1 ]]
+  rm -rf "$root"
+}
+
+test_existing_valid_tag_is_preserved_noop() {
+  local root; root=$(_make_db "5:custom" "[5]")   # already validly tagged
+  "$MIGRATION" "$root"
+  [[ "$(_byparr_tag_count "$root")" -eq 0 ]]   # no byparr tag created
+  [[ "$(_proxy_tags_json "$root")" == "[5]" ]] # unchanged
+  rm -rf "$root"
+}
+
+test_idempotent() {
+  local root; root=$(_make_db "" "[]")
+  "$MIGRATION" "$root"
+  "$MIGRATION" "$root"
+  [[ "$(_byparr_tag_count "$root")" -eq 1 ]]   # not duplicated
+  [[ "$(_proxy_valid_tags "$root")" -ge 1 ]]
+  rm -rf "$root"
+}
+
+test_no_flaresolverr_proxy_is_noop() {
+  local root; root=$(_make_db "" "[]" "Http")   # not a FlareSolverr proxy
+  "$MIGRATION" "$root"
+  [[ "$(_byparr_tag_count "$root")" -eq 0 ]]
+  rm -rf "$root"
+}
+
+test_noop_when_db_absent() {
+  local root; root=$(mktemp -d); mkdir -p "$root/config"
+  "$MIGRATION" "$root"
+  rm -rf "$root"
+}

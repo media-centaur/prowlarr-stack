@@ -9,6 +9,20 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.6.1] - 2026-07-09
+
+### Fixed
+- Corrected the FlareSolverr proxy tag model. v0.5.0–v0.6.0 assumed a proxy with
+  no tags applies to *all* indexers, and therefore *cleared* the proxy's tag. In
+  fact Prowlarr applies an indexer proxy **only to indexers that share a tag with
+  it**, so a no-tag proxy is used by nothing — the solver never ran. The seed now
+  ships a `byparr` tag on the FlareSolverr proxy, and a new migration
+  `0002-flaresolverr-ensure-proxy-tag` restores a valid tag on existing installs
+  whose proxy has none (superseding `0001`, which is left in place but no longer
+  the fix). **Tag your Cloudflare-protected indexers with `byparr`** to route
+  them through the solver — and only those, since a tagged indexer sends all its
+  searches through the slower browser solver. See `docs/indexers.md`.
+
 ## [0.6.0] - 2026-07-09
 
 ### Changed
