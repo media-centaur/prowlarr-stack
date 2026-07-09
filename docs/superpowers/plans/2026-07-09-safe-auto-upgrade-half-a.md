@@ -400,7 +400,17 @@ jj commit -m "feat: migration 0001 — clear orphaned FlareSolverr proxy tags"
 
 ---
 
-## Task 3: Baseline stamp on fresh install (`setup`)
+## Task 3: ~~Baseline stamp on fresh install (`setup`)~~ — REVERTED in v0.5.1
+
+**Superseded:** this task added a `run-migrations --baseline` call to `setup`.
+It was wrong: `setup` runs on every `./update`, so it stamped migrations as
+applied before they could run, skipping them forever on existing installs. The
+baseline mechanism was removed entirely (migrations are idempotent no-ops on
+correct state). The original task text is kept below for history.
+
+---
+
+## Task 3 (original): Baseline stamp on fresh install (`setup`)
 
 **Files:**
 - Modify: `setup` (add a migrations-baseline phase near the end, after the prowlarr.db patch)

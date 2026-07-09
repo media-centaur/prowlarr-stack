@@ -63,19 +63,6 @@ EOF
   rm -rf "$root"
 }
 
-test_baseline_stamps_without_running() {
-  local root; root=$(_scaffold)
-  cat > "$root/migrations/0001-should-not-run" <<'EOF'
-#!/usr/bin/env bash
-touch "$1/config/SHOULD_NOT_EXIST"
-EOF
-  chmod +x "$root/migrations/0001-should-not-run"
-  "$RUNNER" --baseline "$root"
-  [[ ! -f "$root/config/SHOULD_NOT_EXIST" ]]
-  grep -qxF "0001-should-not-run" "$root/config/.migrations"
-  rm -rf "$root"
-}
-
 test_no_migrations_dir_is_noop() {
   local root; root=$(mktemp -d); mkdir -p "$root/config"
   "$RUNNER" "$root"

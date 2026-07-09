@@ -3,23 +3,19 @@
 #
 # A migration is an executable in migrations/ named NNNN-slug (zero-padded
 # sequence + kebab slug). Each receives the install dir as $1 and MUST be
-# idempotent. Applied ids are recorded one-per-line in config/.migrations.
+# idempotent AND a no-op on already-correct or freshly-seeded state — it detects
+# actual state rather than assuming an old version. That contract is why there
+# is no "baseline"/skip mechanism: replaying a migration on correct state does
+# nothing, so a fresh install can safely run the whole set. Applied ids are
+# recorded one-per-line in config/.migrations to avoid needless re-runs.
 #
 # Usage:
 #   run-migrations [install_dir]        apply all pending migrations
-#   run-migrations --baseline [dir]     mark all current migrations applied
-#                                       WITHOUT running them (fresh install)
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/common
 source "$here/lib/common"
-
-baseline=0
-if [[ "${1:-}" == "--baseline" ]]; then
-  baseline=1
-  shift
-fi
 
 root="${1:-$(cd "$here/.." && pwd)}"
 migrations_dir="$root/migrations"
@@ -38,15 +34,9 @@ applied() { grep -qxF "$1" "$state"; }
 # Glob expands in lexical order; zero-padded numeric prefixes == numeric order.
 shopt -s nullglob
 ran=0
-total=0
 for m in "$migrations_dir"/[0-9]*; do
-  total=$((total + 1))
   id="$(basename "$m")"
   applied "$id" && continue
-  if [[ $baseline -eq 1 ]]; then
-    echo "$id" >> "$state"
-    continue
-  fi
   [[ -x "$m" ]] || die "migration not executable: $id"
   log_phase "migration $id"
   if "$m" "$root"; then
@@ -58,9 +48,7 @@ for m in "$migrations_dir"/[0-9]*; do
   fi
 done
 
-if [[ $baseline -eq 1 ]]; then
-  log_ok "migrations" "baselined $total as applied"
-elif [[ $ran -eq 0 ]]; then
+if [[ $ran -eq 0 ]]; then
   log_info "migrations up to date"
 else
   log_ok "migrations" "applied $ran"

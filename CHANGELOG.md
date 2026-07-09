@@ -9,13 +9,23 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.5.1] - 2026-07-09
+
+### Fixed
+- Migrations never ran on existing installs. `setup` baseline-stamped every
+  migration as "applied" (without running it), and `setup` runs on every
+  `./update` — so migration `0001` (and any future one) was skipped forever on
+  already-deployed installs, defeating the framework's purpose. Removed the
+  baseline mechanism entirely: migrations are idempotent and no-op on
+  already-correct/freshly-seeded state, so they simply always run.
+
 ## [0.5.0] - 2026-07-09
 
 ### Added
 - Stack migration framework (`migrations/`, `scripts/run-migrations`):
   idempotent, versioned fixups applied automatically during `./update` (both
-  release and dev modes). A fresh install baselines the current set so it never
-  replays history; existing installs run pending migrations on next update.
+  release and dev modes). Each migration detects actual state and no-ops when
+  already correct, so fresh installs and existing installs both converge.
 - Migration `0001-flaresolverr-orphan-tags`: clears orphaned FlareSolverr proxy
   tags so Prowlarr routes Cloudflare-gated indexers through the solver.
 - Transactional release upgrades: pre-flight backup → migrate → verify (gluetun

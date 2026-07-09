@@ -97,9 +97,12 @@ extensionless** executable (matches the no-`.sh` rule), named `NNNN-slug`
 - **Idempotency:** migrations must be safe to re-run regardless of the state
   file (the state file is a record/optimization, not the sole guard) — same
   contract as `patch-prowlarr-db`.
-- **Fresh install baseline:** `setup` stamps every existing migration id as
-  applied, so a brand-new install (whose default config is already correct) does
-  not replay history.
+- **No baseline (revised during implementation):** an earlier design stamped a
+  "baseline" of applied ids during `setup` so fresh installs skipped history.
+  That was wrong — `setup` runs on every `./update`, so it stamped migrations as
+  applied *before* the migration step could run them, permanently skipping them
+  on existing installs. Removed entirely: migrations are idempotent and no-op on
+  already-correct/freshly-seeded state, so they simply always run and converge.
 - **Scope:** general-purpose — a migration may touch anything under the install
   dir, receiving the install dir as `$1`. Convention: most operate on `config/`
   data. Env/compose *shape* changes ride in with the release tarball; migrations
