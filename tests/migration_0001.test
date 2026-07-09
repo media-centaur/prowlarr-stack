@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -u
+
+MIGRATION="${MIGRATION:-migrations/0001-flaresolverr-orphan-tags}"
+
+# Build an install root with a minimal prowlarr.db (only the tables the
+# migration touches). $1 = Tags rows as "id:label;..." ('' for none),
+# $2 = IndexerProxies Tags JSON.
+_make_db() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/config/prowlarr"
+  local db="$root/config/prowlarr/prowlarr.db"
+  sqlite3 "$db" "CREATE TABLE Tags (Id INTEGER PRIMARY KEY, Label TEXT);"
+  sqlite3 "$db" "CREATE TABLE IndexerProxies (Id INTEGER PRIMARY KEY, Name TEXT, Implementation TEXT, Settings TEXT, ConfigContract TEXT, Tags TEXT);"
+  local IFS=';'
+  for pair in $1; do
+    [[ -z "$pair" ]] && continue
+    sqlite3 "$db" "INSERT INTO Tags (Id, Label) VALUES (${pair%%:*}, '${pair##*:}');"
+  done
+  sqlite3 "$db" "INSERT INTO IndexerProxies (Id, Name, Implementation, Tags) VALUES (1, 'FlareSolverr', 'FlareSolverr', '$2');"
+  echo "$root"
+}
+
+# Membership: does the proxy's Tags array contain id $2?
+_has_tag() {
+  local db="$1/config/prowlarr/prowlarr.db"
+  local n
+  n=$(sqlite3 "$db" "SELECT COUNT(*) FROM json_each((SELECT Tags FROM IndexerProxies WHERE Id=1)) WHERE value=$2;")
+  [[ "$n" -ge 1 ]]
+}
+_tag_count() {
+  local db="$1/config/prowlarr/prowlarr.db"
+  sqlite3 "$db" "SELECT json_array_length(Tags) FROM IndexerProxies WHERE Id=1;"
+}
+
+test_removes_orphan_tag() {
+  local root; root=$(_make_db "" "[1]")   # no Tags rows; proxy references id 1
+  "$MIGRATION" "$root"
+  [[ "$(_tag_count "$root")" -eq 0 ]]
+  rm -rf "$root"
+}
+
+test_keeps_valid_tag() {
+  local root; root=$(_make_db "1:vip" "[1]")   # tag 1 exists
+  "$MIGRATION" "$root"
+  _has_tag "$root" 1
+  [[ "$(_tag_count "$root")" -eq 1 ]]
+  rm -rf "$root"
+}
+
+test_mixed_keeps_valid_drops_orphan() {
+  local root; root=$(_make_db "2:keep" "[1,2]")   # 2 valid, 1 orphan
+  "$MIGRATION" "$root"
+  _has_tag "$root" 2
+  ! _has_tag "$root" 1
+  [[ "$(_tag_count "$root")" -eq 1 ]]
+  rm -rf "$root"
+}
+
+test_idempotent() {
+  local root; root=$(_make_db "" "[1]")
+  "$MIGRATION" "$root"
+  "$MIGRATION" "$root"
+  [[ "$(_tag_count "$root")" -eq 0 ]]
+  rm -rf "$root"
+}
+
+test_noop_when_db_absent() {
+  local root; root=$(mktemp -d); mkdir -p "$root/config"
+  "$MIGRATION" "$root"   # must exit 0
+  rm -rf "$root"
+}

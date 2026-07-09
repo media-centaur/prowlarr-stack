@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# 0001-flaresolverr-orphan-tags — strip orphaned tag ids from Prowlarr indexer
+# proxies. An IndexerProxies.Tags entry referencing a tag id absent from the
+# Tags table scopes the proxy (e.g. FlareSolverr) to a nonexistent tag, so
+# Prowlarr never routes through it and Cloudflare-gated indexer tests fail.
+# Removing orphaned ids restores "no tags = applies to all indexers".
+# Idempotent. No-op when the DB is absent.
+#
+# Usage: 0001-flaresolverr-orphan-tags <install_dir>
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=../scripts/lib/common
+source "$here/../scripts/lib/common"
+
+root="${1:?usage: 0001-flaresolverr-orphan-tags <install_dir>}"
+db="$root/config/prowlarr/prowlarr.db"
+
+if [[ ! -f "$db" ]]; then
+  log_info "no prowlarr.db — skipping (fresh or non-prowlarr install)"
+  exit 0
+fi
+
+# Rebuild each proxy's Tags as the subset of ids still present in Tags.
+# Only rewrite rows that actually contain an orphan (keeps clean rows untouched
+# and the operation idempotent).
+sqlite3 "$db" <<'SQL'
+UPDATE IndexerProxies
+SET Tags = (
+  SELECT COALESCE(json_group_array(je.value), json('[]'))
+  FROM json_each(IndexerProxies.Tags) AS je
+  WHERE je.value IN (SELECT Id FROM Tags)
+)
+WHERE EXISTS (
+  SELECT 1 FROM json_each(IndexerProxies.Tags) AS je
+  WHERE je.value NOT IN (SELECT Id FROM Tags)
+);
+SQL
+
+orphans=$(sqlite3 "$db" "
+  SELECT COUNT(*) FROM IndexerProxies ip
+  JOIN json_each(ip.Tags) je
+  WHERE je.value NOT IN (SELECT Id FROM Tags);
+")
+if [[ "$orphans" != "0" ]]; then
+  die "orphaned proxy tags remain after migration ($orphans)"
+fi
+
+log_ok "0001" "flaresolverr orphan tags cleared"
