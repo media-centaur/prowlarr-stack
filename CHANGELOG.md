@@ -9,6 +9,15 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.6.2] - 2026-07-09
+
+### Changed
+- Documentation: rewrote the README `## Update` section to describe the actual
+  transactional upgrade (pre-flight backup → migrate → verify → auto-rollback)
+  and the `--enable-auto` unattended timer, and added `docs/upgrading.md`
+  covering the full operator procedure, all `./update` flags, and the maintainer
+  release flow.
+
 ## [0.6.1] - 2026-07-09
 
 ### Fixed

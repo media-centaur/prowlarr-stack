@@ -63,13 +63,25 @@ How to add and tune your indexers (and which ones to disable when searches feel 
 ~/prowlarr-stack/update
 ```
 
-Downloads the latest release, verifies its SHA256, preserves your `.env` and `config/`, swaps in the new version, restarts, and re-verifies.
+This is a **transaction**: it takes a pre-flight backup, downloads the latest
+release (verifying its SHA256), preserves your `.env` and `config/`, swaps in the
+new version, runs any pending DB migrations, restarts, and verifies gluetun
+health + VPN isolation. If anything fails — a bad migration, gluetun not coming
+up, isolation broken — it **automatically rolls back** to the version you were on.
 
-To pin to a specific version (including for rollback):
+Pin to a specific version (upgrade, downgrade, or roll back):
 
 ```sh
 ~/prowlarr-stack/update --version v0.1.0 --yes
 ```
+
+Opt into weekly unattended upgrades (safe because of the auto-rollback):
+
+```sh
+~/prowlarr-stack/update --enable-auto     # ~/prowlarr-stack/update --disable-auto to undo
+```
+
+Full procedure, all flags, and the maintainer release flow: [docs/upgrading.md](docs/upgrading.md).
 
 ## Backup & restore
 
