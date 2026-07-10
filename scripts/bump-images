@@ -44,12 +44,10 @@ fi
 
 echo ""
 log_phase "diff"
-if command -v jj >/dev/null 2>&1 && [[ -d .jj ]]; then
-  jj diff docker-compose.yml
-elif command -v git >/dev/null 2>&1 && [[ -d .git ]]; then
+if command -v git >/dev/null 2>&1 && [[ -d .git ]]; then
   git diff docker-compose.yml
 else
-  log_warn "neither jj nor git available — review docker-compose.yml manually"
+  log_warn "git not available — review docker-compose.yml manually"
 fi
 
 log_info "Remember to update CHANGELOG.md under [Unreleased] before committing."

@@ -133,7 +133,7 @@ prowlarr-stack/
 
 `./update` runs:
 
-1. `git pull` (or `jj git fetch && jj rebase` on a jj-tracked repo).
+1. `git pull --ff-only`.
 2. `./setup --non-interactive` — applies any config changes that arrived with the pull.
 3. `docker compose pull` — fetch latest images.
 4. `systemctl --user restart prowlarr-stack` — recreate containers.
@@ -184,13 +184,11 @@ No external dependencies — the test runner is bash and discovers `tests/*.test
 
 ## VCS
 
-The project is tracked with [Jujutsu (jj)](https://github.com/martinvonz/jj). `git` commands would corrupt the repo; use `jj` exclusively. Common operations:
+The project is tracked with plain **git**. Standard workflow:
 
-- `jj log` — history
-- `jj describe -m "…"` — set the current change's description
-- `jj new` — start a fresh empty change on top
-- `jj commit -m "…"` — describe + new in one step
-- `jj undo` — reverse the last operation
+- `git log --oneline` — history
+- `git add -A && git commit -m "…"` — stage + commit
+- `git push origin main` — publish (or use `./scripts/release vX.Y.Z`, which does this plus tagging)
 
 ## Release pipeline
 
@@ -233,7 +231,6 @@ external:    <absolute path>        role:<description>
 `./update` detects mode from file markers:
 
 - `.version` present → release mode (swap tarballs from GitHub Releases; preserves `.env`, `.envrc`, and `config/`).
-- `.jj/` present → jj dev mode (`jj git fetch && jj rebase`).
 - `.git/` present → git dev mode (`git pull --ff-only`).
 
 Release mode also supports `--version vX.Y.Z` for pinning a specific release (any direction — newer or older) for upgrades and rollbacks.

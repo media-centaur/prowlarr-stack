@@ -6,11 +6,11 @@
 
 **Architecture:** Add a migrations framework (idempotent, versioned, extensionless scripts under `migrations/`, applied-set tracked in `config/.migrations`) run by both update modes. Refactor `update`'s release path so the destructive *code swap* is separable from setup/start, letting a failed verify auto-roll-back by re-swapping the previous release and calling the existing `restore`. Ship opt-in systemd timer units toggled by `update --enable-auto`/`--disable-auto`.
 
-**Tech Stack:** bash (POSIX-ish, `set -euo pipefail`), sqlite3 (JSON1 functions), systemd user units, docker compose, jj (primary VCS; `git` also present). Tests are `tests/*.test` bash files run by `scripts/test`; shellcheck + `docker compose config` + tests gated by `scripts/release-checks`.
+**Tech Stack:** bash (POSIX-ish, `set -euo pipefail`), sqlite3 (JSON1 functions), systemd user units, docker compose, git. Tests are `tests/*.test` bash files run by `scripts/test`; shellcheck + `docker compose config` + tests gated by `scripts/release-checks`.
 
 **Repo:** `~/src/media-centaur/prowlarr-stack` (the SOURCE repo — durable changes go here, never in the `~/prowlarr-stack` install). Spec: `docs/superpowers/specs/2026-07-09-safe-auto-upgrade-design.md`.
 
-**Commit convention:** this repo uses jj. Each "Commit" step runs `jj commit -m "..."` (finalizes the working-copy change and opens a fresh empty one). Do not `git commit`.
+**Commit convention:** this repo uses plain git. Each "Commit" step runs `git add -A && git commit -m "..."`.
 
 ---
 
@@ -225,7 +225,7 @@ Expected: `all release checks passed` (or, if shellcheck absent locally, no new 
 
 ```bash
 chmod +x scripts/run-migrations tests/run_migrations.test
-jj commit -m "feat: idempotent stack migration runner (scripts/run-migrations)"
+git commit -am "feat: idempotent stack migration runner (scripts/run-migrations)"
 ```
 
 ---
@@ -395,7 +395,7 @@ Expected: `all release checks passed`.
 
 ```bash
 chmod +x migrations/0001-flaresolverr-orphan-tags tests/migration_0001.test
-jj commit -m "feat: migration 0001 — clear orphaned FlareSolverr proxy tags"
+git commit -am "feat: migration 0001 — clear orphaned FlareSolverr proxy tags"
 ```
 
 ---
@@ -448,7 +448,7 @@ Expected: `BASELINE_OK`.
 - [ ] **Step 4: Commit**
 
 ```bash
-jj commit -m "feat: stamp migration baseline during setup so fresh installs skip history"
+git commit -am "feat: stamp migration baseline during setup so fresh installs skip history"
 ```
 
 ---
@@ -458,7 +458,7 @@ jj commit -m "feat: stamp migration baseline during setup so fresh installs skip
 **Files:**
 - Modify: `update` (`dev_mode_update` — call `run-migrations` after setup, before restart)
 
-**Rationale:** Dev installs (`jj`/`git`) must apply migrations too. Dev mode has no rollback (source-controlled, maintainer-operated); a failed migration should just `die` and stop, which `run-migrations` already does.
+**Rationale:** Dev installs (git) must apply migrations too. Dev mode has no rollback (source-controlled, maintainer-operated); a failed migration should just `die` and stop, which `run-migrations` already does.
 
 - [ ] **Step 1: Add the call**
 
@@ -482,7 +482,7 @@ Expected: `OK`.
 - [ ] **Step 4: Commit**
 
 ```bash
-jj commit -m "feat: run stack migrations during dev-mode update"
+git commit -am "feat: run stack migrations during dev-mode update"
 ```
 
 ---
@@ -577,7 +577,7 @@ Expected: `OK`.
 - [ ] **Step 5: Commit**
 
 ```bash
-jj commit -m "refactor: extract fetch_and_swap_code from release_mode_update"
+git commit -am "refactor: extract fetch_and_swap_code from release_mode_update"
 ```
 
 ---
@@ -708,7 +708,7 @@ Expected: `OK`.
 - [ ] **Step 7: Commit**
 
 ```bash
-jj commit -m "feat: transactional release upgrade — pre-flight backup, migrations, auto-rollback"
+git commit -am "feat: transactional release upgrade — pre-flight backup, migrations, auto-rollback"
 ```
 
 ---
@@ -830,7 +830,7 @@ Expected: `OK`.
 - [ ] **Step 6: Commit**
 
 ```bash
-jj commit -m "feat: opt-in weekly auto-update systemd timer (--enable-auto/--disable-auto)"
+git commit -am "feat: opt-in weekly auto-update systemd timer (--enable-auto/--disable-auto)"
 ```
 
 ---
@@ -866,7 +866,7 @@ Expected: `all release checks passed`.
 - [ ] **Step 3: Commit**
 
 ```bash
-jj commit -m "docs: CHANGELOG for safe self-upgrading releases"
+git commit -am "docs: CHANGELOG for safe self-upgrading releases"
 ```
 
 ---

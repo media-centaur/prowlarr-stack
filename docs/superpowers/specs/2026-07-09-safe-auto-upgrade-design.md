@@ -91,7 +91,7 @@ extensionless** executable (matches the no-`.sh` rule), named `NNNN-slug`
 - **Runner:** `scripts/run-migrations <from> <to>` (also sourced by `update`).
   Iterates `migrations/*` in sorted order, runs each id not present in the
   applied-set, appends its id on success. Invoked in **both** release and dev
-  (`jj`/`git`) update modes.
+  (git) update modes.
 - **State:** applied ids live in `config/.migrations` (one id per line). Lives in
   `config/` so it is preserved across release swaps and captured by `backup`.
 - **Idempotency:** migrations must be safe to re-run regardless of the state

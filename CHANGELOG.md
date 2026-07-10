@@ -9,6 +9,17 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.6.4] - 2026-07-10
+
+### Changed
+- Repo now uses plain **git** (dropped Jujutsu/jj). `update` dev-mode detection,
+  `scripts/release`, and `scripts/bump-images` are git-only, and the docs no
+  longer reference jj. (`./backup` still refuses to write a secrets-bearing
+  tarball into a `.git/` *or* `.jj/` directory — that guard protects users on
+  either VCS and is intentionally kept.)
+- Docs: minor wording — "Cloudflare-protected" (not "FlareSolverr-protected")
+  indexers; neutral version placeholder in the README rollback example.
+
 ## [0.6.3] - 2026-07-10
 
 ### Added

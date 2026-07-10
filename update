@@ -3,7 +3,6 @@
 #
 # Mode detection (in order):
 #   - .version present  → release mode (GitHub Releases tarball swap)
-#   - .jj/ present      → jj dev mode (fetch + rebase)
 #   - .git/ present     → git dev mode (pull)
 #
 # Flags:
@@ -68,12 +67,10 @@ run() {
 # --- Mode detection ---
 if [[ -f .version ]]; then
   UPDATE_MODE=release
-elif [[ -d .jj ]]; then
-  UPDATE_MODE=jj
 elif [[ -d .git ]]; then
   UPDATE_MODE=git
 else
-  die "can't determine update mode (no .version, .jj, or .git); this dir doesn't look like an installed or developer prowlarr-stack"
+  die "can't determine update mode (no .version or .git); this dir doesn't look like an installed or developer prowlarr-stack"
 fi
 
 log_phase "update mode: $UPDATE_MODE"
@@ -265,16 +262,11 @@ release_mode_update() {
   fi
 }
 
-# --- Dev modes (jj / git) ---
+# --- Dev mode (git) ---
 dev_mode_update() {
   if [[ "$MODE" != "images" ]]; then
     log_phase "source update ($UPDATE_MODE)"
-    if [[ "$UPDATE_MODE" == "jj" ]]; then
-      run jj git fetch
-      run jj rebase -d 'main@origin' || log_warn "rebase onto main@origin failed — resolve manually"
-    else
-      run git pull --ff-only
-    fi
+    run git pull --ff-only
     log_ok "source" "up to date"
 
     log_phase "re-running setup (non-interactive)"

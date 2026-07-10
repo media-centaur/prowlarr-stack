@@ -7,7 +7,7 @@
 # confirms the GitHub Release published with its assets. The version number and
 # the CHANGELOG prose are yours to decide — this only does the mechanics.
 #
-# Refuses to run on an installed stack (a .version file). jj-primary, git-aware.
+# Refuses to run on an installed stack (a .version file). Git only; run from main.
 #
 # Usage: scripts/release vX.Y.Z [--yes] [--dry-run] [--no-wait]
 set -euo pipefail
@@ -18,7 +18,6 @@ source scripts/lib/common
 REPO_SLUG="media-centaur/prowlarr-stack"
 VERSION=""; YES=0; DRY_RUN=0; WAIT=1
 
-run() { if [[ $DRY_RUN -eq 1 ]]; then echo "  (dry-run) $*"; else "$@"; fi; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --yes) YES=1; shift ;;
@@ -43,18 +42,12 @@ section=$(awk -v v="$nov" '
 [[ -n "$section" ]] || die "CHANGELOG.md has no '## [$nov]' section — write the release notes first"
 grep -q '^- ' <<<"$section" || die "CHANGELOG '## [$nov]' section has no entries"
 
-# --- resolve the release commit + move the main bookmark ---
-if [[ -d .jj ]]; then
-  is_empty=$(jj log --no-graph -r @ -T 'if(empty, "1", "0")')
-  target='@'; [[ "$is_empty" == "1" ]] && target='@-'
-  rel=$(jj log --no-graph -r "$target" -T 'commit_id')
-  run jj bookmark set main -r "$target"
-elif [[ -d .git ]]; then
-  rel=$(git rev-parse HEAD)
-else
-  die "not a jj or git repo"
-fi
-log_info "release commit: ${rel:0:12}"
+# --- resolve the release commit (HEAD of the current branch, expected: main) ---
+[[ -d .git ]] || die "not a git repo"
+branch=$(git rev-parse --abbrev-ref HEAD)
+[[ "$branch" == "main" ]] || log_warn "on branch '$branch' (not main) — releasing its HEAD"
+rel=$(git rev-parse HEAD)
+log_info "release commit: ${rel:0:12} ($branch)"
 
 git rev-parse "$VERSION" >/dev/null 2>&1 && die "tag $VERSION already exists"
 
@@ -72,7 +65,7 @@ fi
 
 # --- push main, tag, push tag ---
 log_phase "pushing main"
-if [[ -d .jj ]]; then jj git push --bookmark main; else git push origin main; fi
+git push origin main
 
 log_phase "tagging $VERSION"
 git tag -a "$VERSION" "$rel" -m "$VERSION"
