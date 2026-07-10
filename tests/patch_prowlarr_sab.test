@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -u
+
+SCRIPT="${SCRIPT:-scripts/patch-prowlarr-sab}"
+
+_make_db() {
+  local db; db=$(mktemp --suffix=.db)
+  sqlite3 "$db" 'CREATE TABLE DownloadClients (Id INTEGER PRIMARY KEY AUTOINCREMENT, Enable INTEGER NOT NULL, Name TEXT NOT NULL, Implementation TEXT NOT NULL, Settings TEXT NOT NULL, ConfigContract TEXT NOT NULL, Priority INTEGER NOT NULL DEFAULT 1, Categories TEXT NOT NULL DEFAULT '"'"'[]'"'"');'
+  sqlite3 "$db" "INSERT INTO DownloadClients (Enable, Name, Implementation, Settings, ConfigContract) VALUES (1,'SABnzbd','Sabnzbd','{\"host\":\"sabnzbd\",\"port\":8080,\"apiKey\":\"\"}','SabnzbdSettings');"
+  echo "$db"
+}
+
+test_rewrites_host_port_apikey() {
+  local db; db=$(_make_db)
+  "$SCRIPT" "$db" "192.168.1.10" "8085" "deadbeef"
+  local s; s=$(sqlite3 "$db" "SELECT Settings FROM DownloadClients WHERE Implementation='Sabnzbd' LIMIT 1;")
+  echo "$s" | grep -q '"host":"192.168.1.10"'
+  echo "$s" | grep -q '"port":8085'
+  echo "$s" | grep -q '"apiKey":"deadbeef"'
+  rm -f "$db"
+}
+
+test_reads_apikey_from_stdin_when_dash() {
+  local db; db=$(_make_db)
+  printf 'stdinkey' | "$SCRIPT" "$db" "192.168.1.10" "8085" -
+  local k; k=$(sqlite3 "$db" "SELECT json_extract(Settings,'\$.apiKey') FROM DownloadClients WHERE Implementation='Sabnzbd' LIMIT 1;")
+  [[ "$k" == "stdinkey" ]]
+  rm -f "$db"
+}
+
+test_is_idempotent() {
+  local db; db=$(_make_db)
+  "$SCRIPT" "$db" "192.168.1.10" "8085" "k1"
+  "$SCRIPT" "$db" "192.168.1.10" "8085" "k1"
+  [[ "$(sqlite3 "$db" "SELECT COUNT(*) FROM DownloadClients WHERE Implementation='Sabnzbd';")" -eq 1 ]]
+  rm -f "$db"
+}
+
+test_refuses_missing_db() { ! "$SCRIPT" /nonexistent/x.db "192.168.1.10" "8085" 2>/dev/null; }
+
+test_validates_host() {
+  local db; db=$(_make_db)
+  ! "$SCRIPT" "$db" "not-an-ip" "8085" 2>/dev/null
+  rm -f "$db"
+}

@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Idempotently rewrite the SABnzbd download-client row in a Prowlarr DB.
+# Usage: patch-prowlarr-sab <db_path> <host> <port> [apikey|-]
+#
+# SABnzbd always runs direct (never in gluetun's netns), so <host> is the host
+# LAN IP. When [apikey] is '-', it is read from stdin to avoid leaking it via argv.
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/common
+source "$here/lib/common"
+
+db="${1:-}"
+host="${2:-}"
+port="${3:-}"
+apikey_arg="${4:-}"
+
+if [[ -z "$db" || -z "$host" || -z "$port" ]]; then
+  die "usage: patch-prowlarr-sab <db_path> <host> <port> [apikey|-]"
+fi
+
+apikey=""
+if [[ -n "$apikey_arg" ]]; then
+  if [[ "$apikey_arg" == "-" ]]; then
+    apikey=$(cat)
+  else
+    apikey="$apikey_arg"
+  fi
+fi
+
+if [[ ! -f "$db" ]]; then
+  die "DB not found: $db"
+fi
+
+if ! validate_ipv4 "$host" 2>/dev/null; then
+  die "host must be a valid IPv4 address (got: $host)"
+fi
+
+if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+  die "port must be an integer in [1, 65535] (got: $port)"
+fi
+
+# Use SQLite's json_set to rewrite host + port (and optionally apiKey) in
+# the Settings JSON blob for every row with Implementation='Sabnzbd'.
+# Idempotent: json_set either adds or updates each field.
+#
+# apiKey is shell-escaped for SQL by doubling any single quotes ('' is the
+# SQLite literal for a single quote inside a quoted string).
+if [[ -n "$apikey" ]]; then
+  esc_key=$(printf '%s' "$apikey" | sed "s/'/''/g")
+  printf 'UPDATE DownloadClients SET Settings = json_set(Settings, %s, %s, %s, %s, %s, %s) WHERE Implementation = %s;\n' \
+    "'\$.host'" "'$host'" \
+    "'\$.port'" "$port" \
+    "'\$.apiKey'" "'$esc_key'" \
+    "'Sabnzbd'" \
+    | sqlite3 "$db"
+else
+  sqlite3 "$db" "UPDATE DownloadClients SET Settings = json_set(Settings, '\$.host', '$host', '\$.port', $port) WHERE Implementation = 'Sabnzbd';"
+fi
+
+# Verify the update landed.
+count=$(sqlite3 "$db" "SELECT COUNT(*) FROM DownloadClients WHERE Implementation='Sabnzbd' AND json_extract(Settings, '\$.host') = '$host';")
+if [[ "$count" -lt 1 ]]; then
+  die "patch did not take effect — no Sabnzbd row updated"
+fi
+if [[ -n "$apikey" ]]; then
+  actual_key=$(sqlite3 "$db" "SELECT json_extract(Settings, '\$.apiKey') FROM DownloadClients WHERE Implementation='Sabnzbd' LIMIT 1;")
+  if [[ "$actual_key" != "$apikey" ]]; then
+    die "apiKey patch did not take effect"
+  fi
+fi
