@@ -46,7 +46,7 @@ If you hit a "couldn't authenticate" error after a working test, the tracker pro
 
 Need a paid provider for the actual NZB downloads, plus an indexer (also usually paid) for search. Prowlarr handles the indexer side; the download client (SABnzbd / NZBGet) handles the provider side. Faster and more reliable than torrents but not free.
 
-### FlareSolverr-protected indexers
+### Cloudflare-protected indexers
 
 Some indexers sit behind Cloudflare's "checking your browser" challenge. Prowlarr can't pass that on its own. The stack runs **byparr** (a maintained, FlareSolverr-API-compatible solver) as a sidecar that drives a real browser and forwards the cleared request.
 
@@ -152,7 +152,7 @@ A practical opening lineup if you have no preference:
 
 - 1–2 large public torrent indexers from Prowlarr's "Add Indexer" list, filtering for **Health: Healthy** at the time you set up. Avoid anything Prowlarr already lists as known-flaky.
 - 1 meta-aggregator (only if you don't enable its upstreams separately).
-- 1 FlareSolverr-protected indexer if you want broader coverage.
+- 1 Cloudflare-protected indexer (tagged `byparr`) if you want broader coverage.
 - Any private trackers you have accounts on — these are almost always more reliable than public.
 
 Then run a few searches and look at **Indexer Stats** after a day. Disable anything with a success rate under ~80% or an average response time over 10s. Repeat once a month — the public-indexer landscape shifts.

@@ -72,7 +72,7 @@ up, isolation broken — it **automatically rolls back** to the version you were
 Pin to a specific version (upgrade, downgrade, or roll back):
 
 ```sh
-~/prowlarr-stack/update --version v0.1.0 --yes
+~/prowlarr-stack/update --version vX.Y.Z --yes
 ```
 
 Opt into weekly unattended upgrades (safe because of the auto-rollback):
