@@ -170,7 +170,7 @@ fi
 sqlite3 "$db" <<'SQL'
 INSERT INTO DownloadClients (Enable, Name, Implementation, Settings, ConfigContract, Priority, Categories)
 SELECT 1, 'SABnzbd', 'Sabnzbd',
-  '{"host":"sabnzbd","port":8080,"useSsl":false,"urlBase":"","apiKey":"","username":"","password":"","category":"","priority":0}',
+  '{"host":"sabnzbd","port":8080,"useSsl":false,"urlBase":"","apiKey":"","username":"","password":"","category":"prowlarr","priority":-100}',
   'SabnzbdSettings', 1, '[]'
 WHERE NOT EXISTS (SELECT 1 FROM DownloadClients WHERE Implementation = 'Sabnzbd');
 SQL
@@ -183,7 +183,11 @@ log_ok "prowlarr.db" "SABnzbd download-client row ensured"
 
 Make it executable: `chmod 755 migrations/0003-add-sabnzbd-download-client`
 
-> Note: if Task 1 revealed extra required fields, add them to the JSON above with their schema defaults.
+> The `Settings` JSON above uses the exact `SabnzbdSettings` field set confirmed from
+> Prowlarr's live schema (Task 1): `host, port, useSsl, urlBase, apiKey, username,
+> password, category, priority`. `category:"prowlarr"` and `priority:-100` mirror
+> Prowlarr's defaults and the existing qBittorrent seed row. `host`/`port`/`apiKey`
+> are placeholders rewritten by `setup`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -596,19 +600,16 @@ retention = 0
 name = *
 order = 0
 dir = 
-[[tv]]
-name = tv
+[[prowlarr]]
+name = prowlarr
 order = 1
-dir = tv
-[[movies]]
-name = movies
-order = 2
-dir = movies
+dir = 
 ```
 
 Notes:
+- The single `prowlarr` category mirrors `defaults/qbittorrent/categories.json` (which maps `prowlarr` → `/downloads/completed`) and the `category:"prowlarr"` value in the seeded DB row. An empty `dir` lands completed items directly in `complete_dir` (`/downloads/completed`), matching qBittorrent. Downstream *arr apps configure their own categories.
 - `api_key` and `[[server1]]` creds are blank — `setup` injects them via `set-sab-config`.
-- `download_dir`/`complete_dir` are container paths under the shared bind mounts. Category `dir` values are relative to `complete_dir`, so `tv` → `/downloads/completed/tv`.
+- `download_dir`/`complete_dir` are container paths under the shared bind mounts.
 - `inet_exposure = 4` exposes the full API (Prowlarr authenticates with the API key). `host_whitelist` empty — SAB permits IP-addressed hosts by default, which is how Prowlarr connects.
 
 - [ ] **Step 2: Sanity-check the file parses as INI-ish**
