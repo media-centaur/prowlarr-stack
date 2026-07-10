@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Inject the API key and news-server credentials into a sabnzbd.ini.
+
+Usage:
+  set-sab-config <sabnzbd.ini> --api-key KEY --server-host H --server-port P \
+      --server-user U --connections N
+
+The news-server password is read from stdin (trailing newline stripped).
+
+SABnzbd's INI has nested sections: top-level [misc], [servers], and the
+double-bracketed [[server1]] subsection. configparser can't parse the double
+brackets, so this edits lines with a small section-aware state machine:
+  * api_key         -> set in [misc]
+  * host, port,
+    username,
+    password,
+    connections     -> set in [[server1]]
+Only existing keys within the target section are rewritten (the seed ini
+carries them all), so [misc] host/port are never touched by server fields.
+"""
+import argparse
+import os
+import re
+import sys
+
+
+def main() -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("ini")
+    p.add_argument("--api-key", required=True)
+    p.add_argument("--server-host", required=True)
+    p.add_argument("--server-port", required=True)
+    p.add_argument("--server-user", required=True)
+    p.add_argument("--connections", required=True)
+    a = p.parse_args()
+
+    password = sys.stdin.read().rstrip("\n")
+
+    misc = {"api_key": a.api_key}
+    server = {
+        "host": a.server_host,
+        "port": a.server_port,
+        "username": a.server_user,
+        "password": password,
+        "connections": a.connections,
+    }
+
+    try:
+        with open(a.ini) as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        print(f"error: {a.ini} not found", file=sys.stderr)
+        return 1
+
+    section = None
+    key_re = re.compile(r"^(\s*)([A-Za-z0-9_]+)(\s*=).*$")
+    out = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[[") and stripped.endswith("]]"):
+            section = ("server", stripped.strip("[]"))
+        elif stripped.startswith("[") and stripped.endswith("]"):
+            section = ("misc-ish", stripped.strip("[]"))
+        else:
+            m = key_re.match(line)
+            if m:
+                key = m.group(2)
+                repl = None
+                if section and section[0] == "misc-ish" and section[1] == "misc" and key in misc:
+                    repl = misc[key]
+                elif section and section[0] == "server" and key in server:
+                    repl = server[key]
+                if repl is not None:
+                    line = f"{m.group(1)}{key}{m.group(3)} {repl}\n"
+        out.append(line)
+
+    st = os.stat(a.ini)
+    tmp = f"{a.ini}.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
+        f.writelines(out)
+    os.chmod(tmp, st.st_mode & 0o777)
+    os.replace(tmp, a.ini)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

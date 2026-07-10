@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -u
+
+SCRIPT="${SCRIPT:-scripts/set-sab-config}"
+
+_make_ini() {
+  local f; f=$(mktemp --suffix=.ini)
+  cat > "$f" <<'INI'
+[misc]
+host = 0.0.0.0
+port = 8080
+api_key =
+[servers]
+[[server1]]
+name = server1
+host =
+port = 563
+username =
+password =
+connections = 20
+ssl = 1
+enable = 1
+INI
+  echo "$f"
+}
+
+test_sets_api_key_and_server_fields() {
+  local f; f=$(_make_ini)
+  printf 'secretpw' | "$SCRIPT" "$f" --api-key ABC123 --server-host news.example.com --server-port 563 --server-user alice --connections 30
+  grep -qE '^api_key = ABC123$' "$f"
+  grep -qE '^host = news.example.com$' "$f"
+  grep -qE '^username = alice$' "$f"
+  grep -qE '^password = secretpw$' "$f"
+  grep -qE '^connections = 30$' "$f"
+  rm -f "$f"
+}
+
+test_is_idempotent() {
+  local f; f=$(_make_ini)
+  printf 'pw' | "$SCRIPT" "$f" --api-key K --server-host h --server-port 563 --server-user u --connections 20
+  printf 'pw' | "$SCRIPT" "$f" --api-key K --server-host h --server-port 563 --server-user u --connections 20
+  [[ "$(grep -cE '^api_key = K$' "$f")" -eq 1 ]]
+  rm -f "$f"
+}
+
+test_leaves_misc_host_untouched() {
+  # The [misc] host (bind addr) must NOT be overwritten by --server-host.
+  local f; f=$(_make_ini)
+  printf 'pw' | "$SCRIPT" "$f" --api-key K --server-host news.example.com --server-port 563 --server-user u --connections 20
+  grep -qE '^host = 0.0.0.0$' "$f"          # misc host intact
+  grep -qE '^host = news.example.com$' "$f" # server host set
+  rm -f "$f"
+}
