@@ -6,6 +6,17 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **Usenet support via SABnzbd.** A new `sabnzbd` service (WebUI on `8085`,
+  running direct like qBittorrent — usenet has no peer exposure) is pre-wired
+  into Prowlarr as a download client, mirroring the qBittorrent treatment:
+  seeded `defaults/sabnzbd/sabnzbd.ini`, a seeded `Sabnzbd` `DownloadClients`
+  row, and migration `0003-add-sabnzbd-download-client` for existing installs.
+  `setup` generates a SABnzbd API key, injects it plus the news-server
+  credentials (new `.env` block: `USENET_SERVER_*`, `SABNZBD_API_KEY`) into both
+  SABnzbd and Prowlarr (`scripts/set-sab-config`, `scripts/patch-prowlarr-sab`).
+  Provider account + Newznab indexer keys are user-supplied; the stack ships the
+  plumbing ready. See [docs/indexers.md](docs/indexers.md#usenet-providers).
+
 ### Changed
 ### Fixed
 
