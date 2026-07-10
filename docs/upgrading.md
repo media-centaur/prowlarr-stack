@@ -75,12 +75,20 @@ release mode wipes and re-extracts the install dir, so edits there are transient
 3. **Update `CHANGELOG.md`** — move items from `[Unreleased]` into a new
    `## [X.Y.Z] - YYYY-MM-DD` section (the release workflow parses this block for
    the GitHub Release notes).
-4. **Gate:** `./scripts/release-checks` (shellcheck + `docker compose config` +
-   the bash test suite — the same checks CI runs).
-5. **Commit + push** `main`.
-6. **Tag + push:** `git tag -a vX.Y.Z -m "…" && git push origin vX.Y.Z`. The tag
-   push triggers `.github/workflows/release.yml`, which re-runs the checks, builds
-   `prowlarr-stack-vX.Y.Z.tar.gz` + `SHA256SUMS`, and publishes a GitHub Release.
+4. **Commit** the change (and the CHANGELOG) on `main`.
+5. **Cut it:**
+
+   ```sh
+   ./scripts/release vX.Y.Z
+   ```
+
+   `scripts/release` does the rest deterministically: verifies the CHANGELOG has a
+   `## [X.Y.Z]` section, runs `./scripts/release-checks` (shellcheck +
+   `docker compose config` + the bash test suite — same as CI), pushes `main`,
+   tags `vX.Y.Z`, pushes the tag (triggering `.github/workflows/release.yml`,
+   which rebuilds the checks and publishes `prowlarr-stack-vX.Y.Z.tar.gz` +
+   `SHA256SUMS`), then waits for CI and confirms the release published. Use
+   `--dry-run` to gate without pushing, `--yes` to skip the prompt.
 
 Operators then get it via `./update`.
 

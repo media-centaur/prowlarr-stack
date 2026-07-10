@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# scripts/release vX.Y.Z — cut a prowlarr-stack release from the SOURCE repo.
+#
+# Does the deterministic plumbing only: verifies the CHANGELOG has the version's
+# section, runs the full release-checks gate, pushes main, tags vX.Y.Z, pushes
+# the tag (triggering .github/workflows/release.yml), then waits for CI and
+# confirms the GitHub Release published with its assets. The version number and
+# the CHANGELOG prose are yours to decide — this only does the mechanics.
+#
+# Refuses to run on an installed stack (a .version file). jj-primary, git-aware.
+#
+# Usage: scripts/release vX.Y.Z [--yes] [--dry-run] [--no-wait]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+# shellcheck source=lib/common
+source scripts/lib/common
+
+REPO_SLUG="media-centaur/prowlarr-stack"
+VERSION=""; YES=0; DRY_RUN=0; WAIT=1
+
+run() { if [[ $DRY_RUN -eq 1 ]]; then echo "  (dry-run) $*"; else "$@"; fi; }
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --yes) YES=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    --no-wait) WAIT=0; shift ;;
+    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+    v[0-9]*) VERSION="$1"; shift ;;
+    *) die "unknown arg: $1 (try --help)" ;;
+  esac
+done
+
+[[ -n "$VERSION" ]] || die "version required, e.g. scripts/release v0.6.3"
+[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "version must be vX.Y.Z (got: $VERSION)"
+[[ -f .version ]] && die "refusing: this looks like an INSTALLED stack (.version present). Release from the source repo."
+
+# --- CHANGELOG must already carry this version's notes ---
+nov="${VERSION#v}"
+section=$(awk -v v="$nov" '
+  /^## \[/ { if (inb) exit; inb = ($0 ~ "\\["v"\\]") ? 1 : 0; if (inb) { print; next } next }
+  inb { print }
+' CHANGELOG.md)
+[[ -n "$section" ]] || die "CHANGELOG.md has no '## [$nov]' section — write the release notes first"
+grep -q '^- ' <<<"$section" || die "CHANGELOG '## [$nov]' section has no entries"
+
+# --- resolve the release commit + move the main bookmark ---
+if [[ -d .jj ]]; then
+  is_empty=$(jj log --no-graph -r @ -T 'if(empty, "1", "0")')
+  target='@'; [[ "$is_empty" == "1" ]] && target='@-'
+  rel=$(jj log --no-graph -r "$target" -T 'commit_id')
+  run jj bookmark set main -r "$target"
+elif [[ -d .git ]]; then
+  rel=$(git rev-parse HEAD)
+else
+  die "not a jj or git repo"
+fi
+log_info "release commit: ${rel:0:12}"
+
+git rev-parse "$VERSION" >/dev/null 2>&1 && die "tag $VERSION already exists"
+
+# --- gate (read-only; always run) ---
+log_phase "release-checks"
+./scripts/release-checks
+
+if [[ $DRY_RUN -eq 1 ]]; then
+  log_info "(dry-run) would: push main, tag $VERSION @ ${rel:0:12}, push tag, watch CI"
+  exit 0
+fi
+if [[ $YES -eq 0 ]]; then
+  prompt_yes_no "cut release $VERSION at ${rel:0:12}?" y || { log_info "aborted"; exit 0; }
+fi
+
+# --- push main, tag, push tag ---
+log_phase "pushing main"
+if [[ -d .jj ]]; then jj git push --bookmark main; else git push origin main; fi
+
+log_phase "tagging $VERSION"
+git tag -a "$VERSION" "$rel" -m "$VERSION"
+git push origin "$VERSION"
+log_ok "tag" "$VERSION pushed (release workflow triggered)"
+
+# --- wait for CI + verify the published release ---
+if [[ $WAIT -eq 0 ]] || ! command -v gh >/dev/null 2>&1; then
+  log_info "not waiting on CI (${WAIT}/gh). Check: gh run watch --repo $REPO_SLUG"
+  exit 0
+fi
+
+log_phase "waiting for release workflow"
+run_id=""
+for _ in $(seq 1 15); do
+  run_id=$(gh run list --workflow=release.yml --limit 1 --json databaseId,headBranch \
+    -q ".[] | select(.headBranch==\"$VERSION\") | .databaseId" 2>/dev/null || true)
+  [[ -n "$run_id" ]] && break
+  sleep 3
+done
+if [[ -z "$run_id" ]]; then
+  log_warn "release run not found yet — check: gh run list --workflow=release.yml"
+  exit 0
+fi
+if gh run watch "$run_id" --exit-status >/dev/null 2>&1; then
+  log_ok "CI" "release workflow succeeded"
+else
+  die "release workflow failed — inspect: gh run view $run_id --log-failed"
+fi
+
+assets=$(gh release view "$VERSION" --json assets -q '[.assets[].name] | join(", ")' 2>/dev/null || true)
+[[ -n "$assets" ]] || die "release $VERSION published no assets"
+log_ok "release" "$VERSION published: $assets"

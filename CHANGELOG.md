@@ -9,6 +9,17 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [0.6.3] - 2026-07-10
+
+### Added
+- `scripts/tag-cf-indexers`: tests each enabled indexer and tags the
+  Cloudflare-blocked ones with `byparr` (creating the tag if needed), so Prowlarr
+  routes them through the solver. Idempotent; leaves working indexers untouched.
+  Replaces doing this by hand against the API.
+- `scripts/release vX.Y.Z`: cuts a release from the source repo — verifies the
+  CHANGELOG section, runs `release-checks`, pushes `main`, tags, pushes the tag,
+  and waits for CI to publish. `--dry-run` / `--yes` / `--no-wait`.
+
 ## [0.6.2] - 2026-07-09
 
 ### Changed
