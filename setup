@@ -342,6 +342,12 @@ usenet_pass=$(read_env_value "$ENV_FILE" USENET_SERVER_PASSWORD)
 
 SAB_INI="config/sabnzbd/sabnzbd.ini"
 if [[ -f "$SAB_INI" ]]; then
+  # SABnzbd reads sabnzbd.ini only at startup and rewrites it on shutdown, so a
+  # running container would clobber the creds we're about to inject (and Phase 9
+  # force-recreates it, guaranteeing that shutdown). Stop it first so our write
+  # is the last one; Phase 9 ("starting stack") brings it back to read the fresh
+  # config. No-op on a fresh install or when the stack is already down.
+  docker compose stop sabnzbd >/dev/null 2>&1 || true
   printf '%s' "$usenet_pass" | ./scripts/set-sab-config "$SAB_INI" \
     --api-key "$sab_api_key" \
     --server-host "$usenet_host" \

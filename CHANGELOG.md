@@ -9,6 +9,16 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [1.0.2] - 2026-07-10
+
+### Fixed
+- `setup` now stops the `sabnzbd` container before injecting the news-server
+  credentials into `sabnzbd.ini`, so filling `USENET_SERVER_*` in `.env` and
+  re-running `./setup` on a live stack reliably takes effect. Previously
+  SABnzbd (which reads the ini only at startup and rewrites it on shutdown)
+  could overwrite the freshly-injected creds when Phase 9 force-recreated it,
+  making the documented "add creds later, re-run setup" path unreliable.
+
 ## [1.0.1] - 2026-07-10
 
 ### Fixed
