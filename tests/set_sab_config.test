@@ -51,3 +51,24 @@ test_leaves_misc_host_untouched() {
   grep -qE '^host = news.example.com$' "$f" # server host set
   rm -f "$f"
 }
+
+test_leaves_category_subsections_untouched() {
+  # A non-server [[...]] subsection (e.g. a category) must not have a colliding
+  # key rewritten — only [[server*]] takes news-server fields.
+  local f; f=$(mktemp --suffix=.ini)
+  cat > "$f" <<'INI'
+[misc]
+api_key =
+[servers]
+[[server1]]
+host =
+[categories]
+[[prowlarr]]
+name = prowlarr
+host = do-not-touch
+INI
+  printf 'pw' | "$SCRIPT" "$f" --api-key K --server-host news.example.com --server-port 563 --server-user u --connections 20
+  grep -qE '^host = news.example.com$' "$f" # server1 host set
+  grep -qE '^host = do-not-touch$' "$f"     # category host untouched
+  rm -f "$f"
+}

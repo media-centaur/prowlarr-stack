@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Regression guard: on an upgrade from a pre-usenet install, the live prowlarr.db
+# has no Sabnzbd download-client row and setup runs before run-migrations. Phase
+# 6b of ./setup must materialize the row (idempotent migration 0003) BEFORE
+# patch-prowlarr-sab, so the patch never dies on an empty result set.
+set -u
+
+MIGRATION="${MIGRATION:-migrations/0003-add-sabnzbd-download-client}"
+PATCH="${PATCH:-scripts/patch-prowlarr-sab}"
+
+# A DownloadClients table with ONLY a qBittorrent row (pre-usenet install).
+_make_root() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/config/prowlarr"
+  local db="$root/config/prowlarr/prowlarr.db"
+  sqlite3 "$db" 'CREATE TABLE DownloadClients (Id INTEGER PRIMARY KEY AUTOINCREMENT, Enable INTEGER NOT NULL, Name TEXT NOT NULL, Implementation TEXT NOT NULL, Settings TEXT NOT NULL, ConfigContract TEXT NOT NULL, Priority INTEGER NOT NULL DEFAULT 1, Categories TEXT NOT NULL DEFAULT '"'"'[]'"'"');'
+  sqlite3 "$db" "INSERT INTO DownloadClients (Enable,Name,Implementation,Settings,ConfigContract) VALUES (1,'qBittorrent','QBittorrent','{}','QBittorrentSettings');"
+  echo "$root"
+}
+
+test_patch_on_preusenet_db_fails_without_migration() {
+  # Baseline: proves the guard is meaningful — patching a row-less DB DOES die.
+  local root; root=$(_make_root)
+  local db="$root/config/prowlarr/prowlarr.db"
+  ! printf 'k' | "$PATCH" "$db" 192.168.1.10 8085 - 2>/dev/null
+  rm -rf "$root"
+}
+
+test_migration_then_patch_succeeds_on_preusenet_db() {
+  # The Phase 6b sequence: migrate (materialize row) then patch.
+  local root; root=$(_make_root)
+  local db="$root/config/prowlarr/prowlarr.db"
+  "$MIGRATION" "$root"
+  printf 'abcdef' | "$PATCH" "$db" 192.168.1.10 8085 -
+  local s; s=$(sqlite3 "$db" "SELECT Settings FROM DownloadClients WHERE Implementation='Sabnzbd' LIMIT 1;")
+  echo "$s" | grep -q '"host":"192.168.1.10"'
+  echo "$s" | grep -q '"port":8085'
+  echo "$s" | grep -q '"apiKey":"abcdef"'
+  # qBittorrent row still present and untouched
+  [[ "$(sqlite3 "$db" "SELECT COUNT(*) FROM DownloadClients WHERE Implementation='QBittorrent';")" -eq 1 ]]
+  rm -rf "$root"
+}

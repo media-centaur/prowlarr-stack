@@ -181,6 +181,7 @@ echo ""
 echo "${COLOR_BOLD}${COLOR_GREEN}restore complete.${COLOR_RESET}"
 echo "  prowlarr:   http://localhost:9696"
 echo "  qbittorrent: http://localhost:8080"
+echo "  sabnzbd:    http://localhost:8085"
 if [[ $KEEP_SNAPSHOT -eq 1 && ( -e "$ENV_SNAPSHOT" || -e "$CONFIG_SNAPSHOT" ) ]]; then
   echo ""
   echo "  ${COLOR_DIM}rollback (if needed):${COLOR_RESET}"

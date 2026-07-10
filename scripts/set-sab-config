@@ -58,7 +58,11 @@ def main() -> int:
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("[[") and stripped.endswith("]]"):
-            section = ("server", stripped.strip("[]"))
+            # Only [[server*]] subsections take news-server fields. Category
+            # subsections ([[*]], [[prowlarr]], ...) are left untouched even if a
+            # future one grows a key that collides with a server field name.
+            name = stripped.strip("[]")
+            section = ("server", name) if name.startswith("server") else ("other", name)
         elif stripped.startswith("[") and stripped.endswith("]"):
             section = ("misc-ish", stripped.strip("[]"))
         else:

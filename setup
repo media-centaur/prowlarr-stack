@@ -348,7 +348,9 @@ if [[ -f "$SAB_INI" ]]; then
     --server-port "$usenet_port" \
     --server-user "$usenet_user" \
     --connections "$usenet_conns"
-  log_ok "$SAB_INI" "API key + news-server creds written"
+  # Holds the API key + plaintext news-server password — keep it owner-only.
+  chmod 600 "$SAB_INI"
+  log_ok "$SAB_INI" "API key + news-server creds written (mode 600)"
   if [[ -z "$usenet_host" ]]; then
     log_warn "USENET_SERVER_* is empty — SABnzbd starts but can't download until you fill .env and re-run ./setup"
   fi
@@ -357,6 +359,12 @@ else
 fi
 
 if [[ -f config/prowlarr/prowlarr.db ]]; then
+  # Ensure the SABnzbd download-client row exists before patching it. On a fresh
+  # install the seeded DB already carries it; on an upgrade from a pre-usenet
+  # install, setup runs before run-migrations (see ./update), so the live DB has
+  # no row yet — materialize it here with the same idempotent migration (no-op
+  # when the row is already present) so the patch below never hits an empty set.
+  ./migrations/0003-add-sabnzbd-download-client . >/dev/null
   printf '%s' "$sab_api_key" | ./scripts/patch-prowlarr-sab config/prowlarr/prowlarr.db "$lan_ip" 8085 -
   log_ok "prowlarr.db" "SABnzbd download-client host = $lan_ip:8085, API key synced"
 else
