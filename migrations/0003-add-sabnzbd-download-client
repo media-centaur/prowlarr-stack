@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# 0003-add-sabnzbd-download-client — ensure a SABnzbd download-client row exists
+# in the Prowlarr DB so usenet grabs have somewhere to go. The row ships with
+# placeholder host/port/apiKey; ./setup patches them (host=LAN IP, port=8085,
+# generated API key). Idempotent: no-op if a Sabnzbd row already exists or the
+# DB is absent.
+#
+# Usage: 0003-add-sabnzbd-download-client <install_dir>
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=../scripts/lib/common
+source "$here/../scripts/lib/common"
+
+root="${1:?usage: 0003-add-sabnzbd-download-client <install_dir>}"
+db="$root/config/prowlarr/prowlarr.db"
+
+if [[ ! -f "$db" ]]; then
+  log_info "no prowlarr.db — skipping (fresh or non-prowlarr install)"
+  exit 0
+fi
+
+# Canonical SABnzbd DownloadClient row. Settings placeholders (host/port/apiKey)
+# are rewritten by scripts/patch-prowlarr-sab during ./setup. Field names come
+# from Prowlarr's downloadclient schema (SabnzbdSettings).
+sqlite3 "$db" <<'SQL'
+INSERT INTO DownloadClients (Enable, Name, Implementation, Settings, ConfigContract, Priority, Categories)
+SELECT 1, 'SABnzbd', 'Sabnzbd',
+  '{"host":"sabnzbd","port":8080,"useSsl":false,"urlBase":"","apiKey":"","username":"","password":"","category":"prowlarr","priority":-100}',
+  'SabnzbdSettings', 1, '[]'
+WHERE NOT EXISTS (SELECT 1 FROM DownloadClients WHERE Implementation = 'Sabnzbd');
+SQL
+
+if [[ "$(sqlite3 "$db" "SELECT COUNT(*) FROM DownloadClients WHERE Implementation='Sabnzbd';")" -lt 1 ]]; then
+  die "migration did not take effect — no Sabnzbd row present"
+fi
+log_ok "prowlarr.db" "SABnzbd download-client row ensured"

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -u
+
+MIGRATION="${MIGRATION:-migrations/0003-add-sabnzbd-download-client}"
+
+# Build a throwaway install root with a DownloadClients table.
+# $1 = "seed-sab" to pre-insert a Sabnzbd row, "" for none.
+_make_db() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/config/prowlarr"
+  local db="$root/config/prowlarr/prowlarr.db"
+  sqlite3 "$db" 'CREATE TABLE DownloadClients (Id INTEGER PRIMARY KEY AUTOINCREMENT, Enable INTEGER NOT NULL, Name TEXT NOT NULL, Implementation TEXT NOT NULL, Settings TEXT NOT NULL, ConfigContract TEXT NOT NULL, Priority INTEGER NOT NULL DEFAULT 1, Categories TEXT NOT NULL DEFAULT '"'"'[]'"'"');'
+  sqlite3 "$db" "INSERT INTO DownloadClients (Enable, Name, Implementation, Settings, ConfigContract) VALUES (1,'qbittorrent','QBittorrent','{}','QBittorrentSettings');"
+  if [[ "${1:-}" == "seed-sab" ]]; then
+    sqlite3 "$db" "INSERT INTO DownloadClients (Enable, Name, Implementation, Settings, ConfigContract) VALUES (1,'SABnzbd','Sabnzbd','{}','SabnzbdSettings');"
+  fi
+  echo "$root"
+}
+_db() { echo "$1/config/prowlarr/prowlarr.db"; }
+_sab_count() { sqlite3 "$(_db "$1")" "SELECT COUNT(*) FROM DownloadClients WHERE Implementation='Sabnzbd';"; }
+
+test_adds_sabnzbd_row_when_absent() {
+  local root; root=$(_make_db "")
+  "$MIGRATION" "$root"
+  [[ "$(_sab_count "$root")" -eq 1 ]]
+  # qBittorrent row untouched
+  [[ "$(sqlite3 "$(_db "$root")" "SELECT COUNT(*) FROM DownloadClients WHERE Implementation='QBittorrent';")" -eq 1 ]]
+  rm -rf "$root"
+}
+
+test_is_idempotent() {
+  local root; root=$(_make_db "seed-sab")
+  "$MIGRATION" "$root"
+  "$MIGRATION" "$root"
+  [[ "$(_sab_count "$root")" -eq 1 ]]
+  rm -rf "$root"
+}
+
+test_noop_on_missing_db() {
+  local root; root=$(mktemp -d)   # no config/prowlarr/prowlarr.db
+  "$MIGRATION" "$root"            # must exit 0
+  rm -rf "$root"
+}
