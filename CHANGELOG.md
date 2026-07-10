@@ -8,6 +8,13 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Added
 ### Changed
 ### Fixed
+- `tests/restore.test` stubs `systemctl` on PATH so the suite no longer targets
+  the host's global `--user prowlarr-stack` unit. Previously, running
+  `./scripts/test` on a machine with a live install would stop the running
+  stack (the real `./restore` under test issued `systemctl --user stop`).
+- `./backup` no longer depends on the `hostname` binary (absent on some minimal
+  installs, which printed `hostname: command not found`); it derives the short
+  host name from `uname -n`.
 
 ## [1.0.0] - 2026-07-10
 

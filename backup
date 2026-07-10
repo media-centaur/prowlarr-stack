@@ -57,7 +57,9 @@ done
 [[ -d config ]] || die "config/ not found — there's nothing to back up; run ./setup first"
 
 # --- Resolve output path ---
-HOSTNAME_SHORT=$(hostname -s 2>/dev/null || hostname || echo "host")
+# `uname -n` is always present (unlike the `hostname` binary, absent on some
+# minimal/Arch installs); take the short form.
+HOSTNAME_SHORT=$(uname -n 2>/dev/null | cut -d. -f1); [[ -n "$HOSTNAME_SHORT" ]] || HOSTNAME_SHORT="host"
 TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
 DEFAULT_NAME="prowlarr-stack-backup-${HOSTNAME_SHORT}-${TIMESTAMP}.tar.gz"
 if [[ -z "$OUTPUT" ]]; then

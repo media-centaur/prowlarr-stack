@@ -3,6 +3,22 @@ set -u
 
 REPO_ROOT=$(pwd)
 
+# The real ./restore under test calls `systemctl --user ... prowlarr-stack`,
+# which targets the HOST's global user unit — so running these tests on a
+# machine with a live install would stop the running stack. Stub systemctl on
+# PATH so restore's calls are inert: is-active reports "inactive" (exit 3) so
+# restore skips the stop/start, and every other subcommand is a no-op. The
+# runner sources this file once per test function, so this applies to each.
+_STUB_BIN=$(mktemp -d)
+cat > "$_STUB_BIN/systemctl" <<'STUB'
+#!/usr/bin/env bash
+case " $* " in *" is-active "*) exit 3 ;; esac
+exit 0
+STUB
+chmod +x "$_STUB_BIN/systemctl"
+export PATH="$_STUB_BIN:$PATH"
+trap 'rm -rf "$_STUB_BIN"' EXIT
+
 # _make_fake_install <dir> [setup_marker_path]
 # Same shape as the helper in tests/backup.test but installs both backup AND
 # restore, plus a stub ./setup that writes a marker file when called (so
