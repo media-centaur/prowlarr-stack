@@ -75,3 +75,23 @@ services:
       - ${DOWNLOADS_DIR:-/mnt/videos/downloads}:/downloads
       - ${COMPLETED_DIR:-/mnt/videos/completed}:/downloads/completed
     restart: "no"
+
+  sabnzbd:
+    # Usenet download client. Runs direct (not through gluetun): usenet has no
+    # peers/swarm — only the paid news-server sees your IP over TLS — so a VPN
+    # would add latency for no privacy gain. WebUI on 8085 (qBittorrent owns
+    # 8080). Shares qBittorrent's bind mounts so the *arr importers see one
+    # completed/ tree. Credentials + API key are injected by ./setup.
+    image: linuxserver/sabnzbd:5.0.4-ls262
+    container_name: sabnzbd
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Amsterdam
+    ports:
+      - "8085:8080"
+    volumes:
+      - ./config/sabnzbd:/config
+      - ${DOWNLOADS_DIR:-/mnt/videos/downloads}:/downloads
+      - ${COMPLETED_DIR:-/mnt/videos/completed}:/downloads/completed
+    restart: "no"

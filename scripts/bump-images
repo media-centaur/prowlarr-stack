@@ -17,6 +17,7 @@ REPOS=(
   "linuxserver/prowlarr"
   "ghcr.io/thephaseless/byparr"
   "linuxserver/qbittorrent"
+  "linuxserver/sabnzbd"
 )
 
 changed=0

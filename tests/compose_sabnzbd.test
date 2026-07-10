@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -u
+
+COMPOSE="${COMPOSE:-docker-compose.yml}"
+
+test_service_defined() {
+  docker compose -f "$COMPOSE" config --services 2>/dev/null | grep -qx sabnzbd
+}
+
+test_publishes_8085() {
+  docker compose -f "$COMPOSE" config 2>/dev/null | grep -qE 'published:\s*"?8085"?'
+}
+
+test_not_in_gluetun_netns() {
+  # sabnzbd must NOT share gluetun's network namespace (it runs direct).
+  ! docker compose -f "$COMPOSE" config 2>/dev/null \
+    | awk '/^  sabnzbd:/{f=1} f&&/network_mode:.*gluetun/{print; exit}' | grep -q gluetun
+}
