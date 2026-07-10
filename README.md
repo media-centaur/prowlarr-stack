@@ -10,6 +10,7 @@ Indexer queries (and optionally torrent traffic) are routed through a WireGuard 
 | --- | --- |
 | **Prowlarr** | Searches across your chosen indexers (tracker sites) from one place. Has a web UI and an API that other tools can hit. |
 | **qBittorrent** | A BitTorrent client with a web UI. Handles the actual uploads and downloads. |
+| **SABnzbd** | A Usenet (NZB) download client with a web UI, pre-wired into Prowlarr. Handles usenet grabs. Idle until you add a news-server account — see [docs/indexers.md](docs/indexers.md#usenet-providers). Runs direct (not through the VPN); usenet has no peer exposure. |
 | **byparr** | A maintained, FlareSolverr-API-compatible helper that solves Cloudflare challenge pages on behalf of Prowlarr, so Prowlarr can reach indexers that use them. (In Prowlarr you still add a "FlareSolverr" proxy — byparr speaks that protocol.) |
 | **gluetun** | A VPN gateway container. Routes Prowlarr + byparr through your VPN provider so your ISP doesn't see which indexers you're browsing. By default qBittorrent runs at full ISP speed outside the VPN — see [qBittorrent network routing](#qbittorrent-network-routing) for the opt-in tunneled mode. |
 
@@ -50,7 +51,8 @@ Either path runs the same interactive flow: prerequisite check, VPN provider sel
 When it's done:
 
 - **Prowlarr** → <http://localhost:9696> — add indexers, connect to qBittorrent.
-- **qBittorrent** → <http://localhost:8080> — watch downloads progress.
+- **qBittorrent** → <http://localhost:8080> — watch torrent downloads progress.
+- **SABnzbd** → <http://localhost:8085> — usenet downloads (add a news-server account first; see [docs/indexers.md](docs/indexers.md#usenet-providers)).
 - **What was installed where?** → `cat ~/prowlarr-stack/MANIFEST`
 
 Full per-provider credential-extraction steps: [docs/providers.md](docs/providers.md).

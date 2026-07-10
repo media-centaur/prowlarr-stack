@@ -44,7 +44,15 @@ If you hit a "couldn't authenticate" error after a working test, the tracker pro
 
 ### Usenet providers
 
-Need a paid provider for the actual NZB downloads, plus an indexer (also usually paid) for search. Prowlarr handles the indexer side; the download client (SABnzbd / NZBGet) handles the provider side. Faster and more reliable than torrents but not free.
+Need a paid provider for the actual NZB downloads, plus an indexer (also usually paid) for search. Prowlarr handles the indexer side; **SABnzbd** — included in the stack and pre-wired as a download client — handles the provider side. Faster and more reliable than torrents but not free.
+
+The stack ships SABnzbd ready to go, but it can't download until you give it a news-server account:
+
+1. Sign up with a Usenet provider (Newshosting, Eweka, Frugal, etc.) and one or more Newznab indexers (NZBgeek, DrunkenSlug, etc.).
+2. Fill the `USENET_SERVER_*` block in `.env` with your provider's host/username/password, then re-run `~/prowlarr-stack/setup`. It injects the credentials into SABnzbd (at <http://localhost:8085>) and keeps SABnzbd and Prowlarr sharing one auto-generated API key.
+3. Add your Newznab indexers in Prowlarr (Settings → Indexers → Add Indexer). Usenet grabs route to the pre-wired SABnzbd client.
+
+SABnzbd runs direct (not through the VPN): usenet has no peers or swarm — only your paid provider sees your IP over TLS — so a VPN would add latency for no privacy gain.
 
 ### Cloudflare-protected indexers
 
