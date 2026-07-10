@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Behavior of the SABnzbd post-processing script: finished jobs move
+# atomically from .staging into the completed tree with cruft removed;
+# failed jobs stay put; name collisions land uniquely.
+set -u
+
+SCRIPT="${SCRIPT:-defaults/sabnzbd/scripts/move-finished.sh}"
+
+_make_dirs() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/completed/.staging/Sample.Show.S01E01.1080p.WEB-DL"
+  echo "$root"
+}
+
+test_success_moves_job_and_drops_cruft() {
+  local root; root=$(_make_dirs)
+  local job="$root/completed/.staging/Sample.Show.S01E01.1080p.WEB-DL"
+  touch "$job/episode.mkv" "$job/episode.vol-01.par2" "$job/episode.sfv" "$job/episode.nzb"
+
+  SAB_COMPLETE_DIR="$job" SAB_PP_STATUS=0 MOVE_FINISHED_DEST="$root/completed" bash "$SCRIPT"
+
+  [[ ! -e "$job" ]]
+  [[ -f "$root/completed/Sample.Show.S01E01.1080p.WEB-DL/episode.mkv" ]]
+  [[ ! -e "$root/completed/Sample.Show.S01E01.1080p.WEB-DL/episode.vol-01.par2" ]]
+  [[ ! -e "$root/completed/Sample.Show.S01E01.1080p.WEB-DL/episode.sfv" ]]
+  [[ ! -e "$root/completed/Sample.Show.S01E01.1080p.WEB-DL/episode.nzb" ]]
+  rm -rf "$root"
+}
+
+test_failed_job_stays_in_staging() {
+  local root; root=$(_make_dirs)
+  local job="$root/completed/.staging/Sample.Show.S01E01.1080p.WEB-DL"
+  touch "$job/episode.mkv"
+
+  SAB_COMPLETE_DIR="$job" SAB_PP_STATUS=2 MOVE_FINISHED_DEST="$root/completed" bash "$SCRIPT"
+
+  [[ -f "$job/episode.mkv" ]]
+  [[ ! -e "$root/completed/Sample.Show.S01E01.1080p.WEB-DL" ]]
+  rm -rf "$root"
+}
+
+test_name_collision_lands_uniquely() {
+  local root; root=$(_make_dirs)
+  local job="$root/completed/.staging/Sample.Show.S01E01.1080p.WEB-DL"
+  touch "$job/episode.mkv"
+  mkdir -p "$root/completed/Sample.Show.S01E01.1080p.WEB-DL"
+  touch "$root/completed/Sample.Show.S01E01.1080p.WEB-DL/existing.mkv"
+
+  SAB_COMPLETE_DIR="$job" SAB_PP_STATUS=0 MOVE_FINISHED_DEST="$root/completed" bash "$SCRIPT"
+
+  [[ -f "$root/completed/Sample.Show.S01E01.1080p.WEB-DL/existing.mkv" ]]
+  local landed; landed=$(find "$root/completed" -maxdepth 2 -name "episode.mkv" | head -1)
+  [[ -n "$landed" ]]
+  [[ "$landed" != *"/.staging/"* ]]
+  rm -rf "$root"
+}

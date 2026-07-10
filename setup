@@ -340,6 +340,24 @@ usenet_user=$(read_env_value "$ENV_FILE" USENET_SERVER_USERNAME)
 usenet_conns=$(read_env_value "$ENV_FILE" USENET_SERVER_CONNECTIONS); [[ -z "$usenet_conns" ]] && usenet_conns=20
 usenet_pass=$(read_env_value "$ENV_FILE" USENET_SERVER_PASSWORD)
 
+# SABnzbd post-processing script: jobs assemble in complete_dir =
+# /downloads/completed/.staging (a reserved directory name Media Centaur's
+# watcher never looks inside), and this script moves each *finished* job —
+# final names, final content, cruft removed — into /downloads/completed in
+# one atomic rename. The scripts dir is stack-managed: refreshed from
+# defaults/ on every setup run, so upgrades pick up script fixes.
+mkdir -p config/sabnzbd/scripts
+cp defaults/sabnzbd/scripts/move-finished.sh config/sabnzbd/scripts/move-finished.sh
+chmod +x config/sabnzbd/scripts/move-finished.sh
+log_ok "config/sabnzbd/scripts/move-finished.sh" "refreshed from defaults"
+
+# Pre-create the staging dir so the first grab doesn't depend on SABnzbd's
+# dir creation happening before the importer's first look.
+if [[ -n "$completed_dir" ]]; then
+  mkdir -p "$completed_dir/.staging" 2>/dev/null || \
+    log_warn "$completed_dir/.staging could not be created — SABnzbd will create it on first use"
+fi
+
 SAB_INI="config/sabnzbd/sabnzbd.ini"
 if [[ -f "$SAB_INI" ]]; then
   # SABnzbd reads sabnzbd.ini only at startup and rewrites it on shutdown, so a
@@ -348,15 +366,21 @@ if [[ -f "$SAB_INI" ]]; then
   # is the last one; Phase 9 ("starting stack") brings it back to read the fresh
   # config. No-op on a fresh install or when the stack is already down.
   docker compose stop sabnzbd >/dev/null 2>&1 || true
+  # --complete-dir/--script-dir/--category-script converge pre-staging
+  # installs onto the staged layout (fresh installs already carry these in
+  # the seeded ini; re-applying is idempotent).
   printf '%s' "$usenet_pass" | ./scripts/set-sab-config "$SAB_INI" \
     --api-key "$sab_api_key" \
     --server-host "$usenet_host" \
     --server-port "$usenet_port" \
     --server-user "$usenet_user" \
-    --connections "$usenet_conns"
+    --connections "$usenet_conns" \
+    --complete-dir "/downloads/completed/.staging" \
+    --script-dir "/config/scripts" \
+    --category-script "move-finished.sh"
   # Holds the API key + plaintext news-server password — keep it owner-only.
   chmod 600 "$SAB_INI"
-  log_ok "$SAB_INI" "API key + news-server creds written (mode 600)"
+  log_ok "$SAB_INI" "API key + news-server creds + staging layout written (mode 600)"
   if [[ -z "$usenet_host" ]]; then
     log_warn "USENET_SERVER_* is empty — SABnzbd starts but can't download until you fill .env and re-run ./setup"
   fi

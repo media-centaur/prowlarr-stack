@@ -9,6 +9,21 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [1.1.0] - 2026-07-10
+
+### Changed
+- **SABnzbd assembles jobs in a hidden staging folder and moves only finished
+  content into the completed tree.** Post-processing (par2 verify/repair,
+  unpacking, renames) previously churned directly inside the completed
+  folder, so an importer watching it could pick up half-extracted files
+  under temporary names. Jobs now complete into `completed/.staging/` — a
+  reserved folder importers ignore — and a post-processing script
+  (`move-finished.sh`, stack-managed, refreshed on every `./setup`) moves
+  each successful job into the completed tree in one atomic rename, dropping
+  `.par2`/`.sfv`/`.nzb` recovery files on the way. Failed jobs stay in
+  staging; delete them from SABnzbd's history with "delete files". Existing
+  installs converge automatically on `./update`.
+
 ## [1.0.2] - 2026-07-10
 
 ### Fixed

@@ -7,14 +7,22 @@ Usage:
 
 The news-server password is read from stdin (trailing newline stripped).
 
+Optional staging/script wiring (used by ./setup so upgrades from
+pre-staging installs converge on the seeded layout):
+  --complete-dir DIR      -> [misc] complete_dir
+  --script-dir DIR        -> [misc] script_dir
+  --category-script NAME  -> `script` key in every [[category]] subsection
+
 SABnzbd's INI has nested sections: top-level [misc], [servers], and the
 double-bracketed [[server1]] subsection. configparser can't parse the double
 brackets, so this edits lines with a small section-aware state machine:
-  * api_key         -> set in [misc]
+  * api_key, complete_dir,
+    script_dir      -> set in [misc]
   * host, port,
     username,
     password,
     connections     -> set in [[server1]]
+  * script          -> set in every non-server [[subsection]] (categories)
 Only existing keys within the target section are rewritten (the seed ini
 carries them all), so [misc] host/port are never touched by server fields.
 """
@@ -32,11 +40,19 @@ def main() -> int:
     p.add_argument("--server-port", required=True)
     p.add_argument("--server-user", required=True)
     p.add_argument("--connections", required=True)
+    p.add_argument("--complete-dir")
+    p.add_argument("--script-dir")
+    p.add_argument("--category-script")
     a = p.parse_args()
 
     password = sys.stdin.read().rstrip("\n")
 
     misc = {"api_key": a.api_key}
+    if a.complete_dir:
+        misc["complete_dir"] = a.complete_dir
+    if a.script_dir:
+        misc["script_dir"] = a.script_dir
+    category = {"script": a.category_script} if a.category_script else {}
     server = {
         "host": a.server_host,
         "port": a.server_port,
@@ -74,6 +90,8 @@ def main() -> int:
                     repl = misc[key]
                 elif section and section[0] == "server" and key in server:
                     repl = server[key]
+                elif section and section[0] == "other" and key in category:
+                    repl = category[key]
                 if repl is not None:
                     line = f"{m.group(1)}{key}{m.group(3)} {repl}\n"
         out.append(line)

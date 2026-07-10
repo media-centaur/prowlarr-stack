@@ -52,7 +52,7 @@ When it's done:
 
 - **Prowlarr** → <http://localhost:9696> — add indexers, connect to qBittorrent.
 - **qBittorrent** → <http://localhost:8080> — watch torrent downloads progress.
-- **SABnzbd** → <http://localhost:8085> — usenet downloads (add a news-server account first; see [docs/indexers.md](docs/indexers.md#usenet-providers)).
+- **SABnzbd** → <http://localhost:8085> — usenet downloads (add a news-server account first; see [docs/indexers.md](docs/indexers.md#usenet-providers)). Jobs assemble in `completed/.staging/`; only finished, cleaned-up content moves into the completed tree, so importers watching it never see repair/unpack churn.
 - **What was installed where?** → `cat ~/prowlarr-stack/MANIFEST`
 
 Full per-provider credential-extraction steps: [docs/providers.md](docs/providers.md).
