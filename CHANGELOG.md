@@ -8,6 +8,10 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Added
 ### Changed
 ### Fixed
+
+## [1.0.1] - 2026-07-10
+
+### Fixed
 - `tests/restore.test` stubs `systemctl` on PATH so the suite no longer targets
   the host's global `--user prowlarr-stack` unit. Previously, running
   `./scripts/test` on a machine with a live install would stop the running
