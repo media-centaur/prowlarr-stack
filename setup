@@ -266,6 +266,7 @@ files=(
   "defaults/prowlarr/prowlarr.db:config/prowlarr/prowlarr.db"
   "defaults/qbittorrent/qBittorrent.conf:config/qbittorrent/qBittorrent/qBittorrent.conf"
   "defaults/qbittorrent/categories.json:config/qbittorrent/qBittorrent/categories.json"
+  "defaults/sabnzbd/sabnzbd.ini:config/sabnzbd/sabnzbd.ini"
 )
 for entry in "${files[@]}"; do
   src="${entry%%:*}"
@@ -315,6 +316,51 @@ if [[ -f config/prowlarr/prowlarr.db ]]; then
   log_ok "prowlarr.db" "download-client host = $qbt_host, password synced"
 else
   log_warn "config/prowlarr/prowlarr.db not present — skipping patch"
+fi
+
+# --- Phase 6b: SABnzbd (usenet) config + DB wiring ---
+# SABnzbd always runs direct (never in gluetun's netns), so Prowlarr reaches it
+# at the host LAN IP:8085. Provider credentials come from .env (empty until the
+# user has a Usenet account); the API key is generated once and shared into both
+# SABnzbd's config and Prowlarr's download-client row.
+log_phase "SABnzbd (usenet)"
+
+sab_api_key=$(read_env_value "$ENV_FILE" SABNZBD_API_KEY)
+if [[ -z "$sab_api_key" ]]; then
+  sab_api_key=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+  write_env_value "$ENV_FILE" SABNZBD_API_KEY "$sab_api_key"
+  log_ok "SABNZBD_API_KEY" "generated and saved to .env"
+else
+  log_ok "SABNZBD_API_KEY" "read from .env"
+fi
+
+usenet_host=$(read_env_value "$ENV_FILE" USENET_SERVER_HOST)
+usenet_port=$(read_env_value "$ENV_FILE" USENET_SERVER_PORT); [[ -z "$usenet_port" ]] && usenet_port=563
+usenet_user=$(read_env_value "$ENV_FILE" USENET_SERVER_USERNAME)
+usenet_conns=$(read_env_value "$ENV_FILE" USENET_SERVER_CONNECTIONS); [[ -z "$usenet_conns" ]] && usenet_conns=20
+usenet_pass=$(read_env_value "$ENV_FILE" USENET_SERVER_PASSWORD)
+
+SAB_INI="config/sabnzbd/sabnzbd.ini"
+if [[ -f "$SAB_INI" ]]; then
+  printf '%s' "$usenet_pass" | ./scripts/set-sab-config "$SAB_INI" \
+    --api-key "$sab_api_key" \
+    --server-host "$usenet_host" \
+    --server-port "$usenet_port" \
+    --server-user "$usenet_user" \
+    --connections "$usenet_conns"
+  log_ok "$SAB_INI" "API key + news-server creds written"
+  if [[ -z "$usenet_host" ]]; then
+    log_warn "USENET_SERVER_* is empty — SABnzbd starts but can't download until you fill .env and re-run ./setup"
+  fi
+else
+  log_warn "$SAB_INI not present — skipping SABnzbd config injection"
+fi
+
+if [[ -f config/prowlarr/prowlarr.db ]]; then
+  printf '%s' "$sab_api_key" | ./scripts/patch-prowlarr-sab config/prowlarr/prowlarr.db "$lan_ip" 8085 -
+  log_ok "prowlarr.db" "SABnzbd download-client host = $lan_ip:8085, API key synced"
+else
+  log_warn "config/prowlarr/prowlarr.db not present — skipping SABnzbd DB patch"
 fi
 
 # --- Phase 7: storage path validation ---
@@ -423,10 +469,17 @@ else
 fi
 echo "    Password  ${COLOR_YELLOW}${qbt_pw}${COLOR_RESET}   ${COLOR_DIM}(static — change in .env as QBITTORRENT_PASSWORD and re-run ${display_dir}/setup)${COLOR_RESET}"
 echo ""
+echo "  ${COLOR_BOLD}SABnzbd${COLOR_RESET} ${COLOR_DIM}(usenet)${COLOR_RESET}"
+echo "    URL       http://${lan_ip}:8085"
+echo "    API key   ${COLOR_YELLOW}${sab_api_key}${COLOR_RESET}"
+if [[ -z "$usenet_host" ]]; then
+  echo "    ${COLOR_DIM}add your Usenet provider account in .env (USENET_SERVER_*) and re-run ${display_dir}/setup${COLOR_RESET}"
+fi
+echo ""
 echo ""
 echo "${COLOR_BOLD}Next step:${COLOR_RESET} add indexers in Prowlarr."
 echo "  open ${COLOR_CYAN}http://${lan_ip}:9696${COLOR_RESET} → Indexers → ${COLOR_BOLD}Add Indexer${COLOR_RESET}"
-echo "  ${COLOR_DIM}qBittorrent is already wired in as the download client.${COLOR_RESET}"
+echo "  ${COLOR_DIM}qBittorrent (torrents) and SABnzbd (usenet) are already wired in as download clients.${COLOR_RESET}"
 echo ""
 echo "verify isolation any time:   ${COLOR_CYAN}${display_dir}/check${COLOR_RESET}"
 echo "update stack:                ${COLOR_CYAN}${display_dir}/update${COLOR_RESET}"
