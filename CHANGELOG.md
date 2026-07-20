@@ -9,6 +9,17 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [1.1.1] - 2026-07-20
+
+### Fixed
+- **SABnzbd categories now force Repair+Unpack+Delete (`pp = 3`).** The seeded
+  `sabnzbd.ini` left category `pp` blank, which SABnzbd treats as its own
+  default (download + verify only) — archives were never unpacked, so
+  multi-part `.rar` releases landed in `completed/` unextracted.
+  `set-sab-config` gained `--category-pp`, wired into `./setup` alongside
+  `--category-script`, so existing installs converge on `./update` /
+  `./setup` the same way the staging layout did.
+
 ## [1.1.0] - 2026-07-10
 
 ### Changed

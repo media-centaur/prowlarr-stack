@@ -74,8 +74,8 @@ INI
 }
 
 test_staging_flags_write_layout_keys() {
-  # --complete-dir/--script-dir land in [misc]; --category-script lands in
-  # every category subsection (and only there).
+  # --complete-dir/--script-dir land in [misc]; --category-script/--category-pp
+  # land in every category subsection (and only there).
   local f; f=$(mktemp --suffix=.ini)
   cat > "$f" <<'INI'
 [misc]
@@ -92,18 +92,21 @@ connections = 20
 [categories]
 [[*]]
 name = *
+pp =
 script = Default
 dir =
 [[prowlarr]]
 name = prowlarr
+pp =
 script = Default
 dir =
 INI
   printf 'pw' | "$SCRIPT" "$f" --api-key K --server-host h --server-port 563 --server-user u --connections 20 \
-    --complete-dir /downloads/completed/.staging --script-dir /config/scripts --category-script move-finished.sh
+    --complete-dir /downloads/completed/.staging --script-dir /config/scripts --category-script move-finished.sh --category-pp 3
   grep -qE '^complete_dir = /downloads/completed/.staging$' "$f"
   grep -qE '^script_dir = /config/scripts$' "$f"
   [[ "$(grep -cE '^script = move-finished.sh$' "$f")" -eq 2 ]]
+  [[ "$(grep -cE '^pp = 3$' "$f")" -eq 2 ]]
   rm -f "$f"
 }
 

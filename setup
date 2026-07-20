@@ -366,9 +366,11 @@ if [[ -f "$SAB_INI" ]]; then
   # is the last one; Phase 9 ("starting stack") brings it back to read the fresh
   # config. No-op on a fresh install or when the stack is already down.
   docker compose stop sabnzbd >/dev/null 2>&1 || true
-  # --complete-dir/--script-dir/--category-script converge pre-staging
-  # installs onto the staged layout (fresh installs already carry these in
-  # the seeded ini; re-applying is idempotent).
+  # --complete-dir/--script-dir/--category-script/--category-pp converge
+  # pre-staging installs onto the seeded layout (fresh installs already carry
+  # these in the seeded ini; re-applying is idempotent). --category-pp 3
+  # forces Repair+Unpack+Delete: a blank category `pp` (SABnzbd's own default)
+  # only downloads and verifies, so archives never get unpacked.
   printf '%s' "$usenet_pass" | ./scripts/set-sab-config "$SAB_INI" \
     --api-key "$sab_api_key" \
     --server-host "$usenet_host" \
@@ -377,7 +379,8 @@ if [[ -f "$SAB_INI" ]]; then
     --connections "$usenet_conns" \
     --complete-dir "/downloads/completed/.staging" \
     --script-dir "/config/scripts" \
-    --category-script "move-finished.sh"
+    --category-script "move-finished.sh" \
+    --category-pp "3"
   # Holds the API key + plaintext news-server password — keep it owner-only.
   chmod 600 "$SAB_INI"
   log_ok "$SAB_INI" "API key + news-server creds + staging layout written (mode 600)"

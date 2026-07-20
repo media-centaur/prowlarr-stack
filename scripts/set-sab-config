@@ -12,6 +12,7 @@ pre-staging installs converge on the seeded layout):
   --complete-dir DIR      -> [misc] complete_dir
   --script-dir DIR        -> [misc] script_dir
   --category-script NAME  -> `script` key in every [[category]] subsection
+  --category-pp PP        -> `pp` key in every [[category]] subsection
 
 SABnzbd's INI has nested sections: top-level [misc], [servers], and the
 double-bracketed [[server1]] subsection. configparser can't parse the double
@@ -22,7 +23,7 @@ brackets, so this edits lines with a small section-aware state machine:
     username,
     password,
     connections     -> set in [[server1]]
-  * script          -> set in every non-server [[subsection]] (categories)
+  * script, pp      -> set in every non-server [[subsection]] (categories)
 Only existing keys within the target section are rewritten (the seed ini
 carries them all), so [misc] host/port are never touched by server fields.
 """
@@ -43,6 +44,7 @@ def main() -> int:
     p.add_argument("--complete-dir")
     p.add_argument("--script-dir")
     p.add_argument("--category-script")
+    p.add_argument("--category-pp")
     a = p.parse_args()
 
     password = sys.stdin.read().rstrip("\n")
@@ -52,7 +54,11 @@ def main() -> int:
         misc["complete_dir"] = a.complete_dir
     if a.script_dir:
         misc["script_dir"] = a.script_dir
-    category = {"script": a.category_script} if a.category_script else {}
+    category = {}
+    if a.category_script:
+        category["script"] = a.category_script
+    if a.category_pp:
+        category["pp"] = a.category_pp
     server = {
         "host": a.server_host,
         "port": a.server_port,
