@@ -35,3 +35,26 @@ DOWNLOADS_DIR=/tmp/d
 COMPLETED_DIR=/tmp/c")
   [[ "$out" == *"depends on undefined service"* ]]
 }
+
+_gluetun_config() {  # resolved compose config for the gluetun service, as JSON
+  local root; root=$(mktemp -d)
+  cp docker-compose.yml docker-compose.qbt-vpn.yml "$root/"
+  printf 'COMPOSE_PROFILES=vpn\nDOWNLOADS_DIR=/tmp/d\nCOMPLETED_DIR=/tmp/c\n' > "$root/.env"
+  (cd "$root" && docker compose config --format json)
+  rm -rf "$root"
+}
+
+test_gluetun_exposes_http_proxy() {
+  # Assert the RESOLVED config, not the file's text: a commented-out line would
+  # satisfy a grep over the source.
+  local env_json
+  env_json=$(_gluetun_config | python3 -c 'import sys,json; print(json.dumps(json.load(sys.stdin)["services"]["gluetun"]["environment"]))')
+  [[ "$env_json" == *'"HTTPPROXY": "on"'* || "$env_json" == *'HTTPPROXY=on'* ]]
+}
+
+test_http_proxy_is_not_published_to_the_host() {
+  # 8888 is reachable by sibling containers on the bridge, never bound on the host.
+  local published
+  published=$(_gluetun_config | python3 -c 'import sys,json; s=json.load(sys.stdin)["services"]; print(" ".join(str(p.get("published","")) for v in s.values() for p in v.get("ports",[])))')
+  [[ "$published" != *8888* ]]
+}

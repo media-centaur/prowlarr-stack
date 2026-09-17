@@ -14,6 +14,11 @@ services:
       - WIREGUARD_PRESHARED_KEY=${WIREGUARD_PRESHARED_KEY:-}
       - SERVER_COUNTRIES=${SERVER_COUNTRIES}
       - FIREWALL_OUTBOUND_SUBNETS=${LAN_SUBNET}
+      # Exposes the tunnel as a proxy on 8888 for Prowlarr's `vpn`-tagged
+      # indexers. Bridge-only: never published to the host. Verified that
+      # gluetun's firewall accepts bridge-inbound here without
+      # FIREWALL_INPUT_PORTS.
+      - HTTPPROXY=on
       - TZ=Europe/Amsterdam
     ports:
       - "8191:8191"   # byparr solver (netns-shared)
