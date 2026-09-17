@@ -20,13 +20,22 @@ test_no_vpn_with_only_usenet_indexers_passes() {
 test_no_vpn_with_enabled_torrent_indexer_fails() {
   setup_fake
   _fake_indexers '[{"id":9,"name":"Sample Tracker","protocol":"torrent","enable":true,"tags":[]}]'
-  ! assert_torrent_indexers_tagged "" ""
+  local out rc=0
+  out=$(assert_torrent_indexers_tagged "" "" 2>&1) || rc=$?
+  [[ $rc -ne 0 ]]
+  # Must fail *because of that indexer* — a broken fetch also exits non-zero,
+  # and a bare `! cmd` would pass on it (or on exit 127 for a missing function).
+  [[ "$out" == *"Sample Tracker"* ]]
 }
 
 test_vpn_with_untagged_torrent_indexer_fails() {
   setup_fake
   _fake_indexers '[{"id":9,"name":"Sample Tracker","protocol":"torrent","enable":true,"tags":[]}]'
-  ! assert_torrent_indexers_tagged "vpn" "3"
+  local out rc=0
+  out=$(assert_torrent_indexers_tagged "vpn" "3" 2>&1) || rc=$?
+  [[ $rc -ne 0 ]]
+  [[ "$out" == *"Sample Tracker"* ]]
+  [[ "$out" == *"missing the vpn tag"* ]]
 }
 
 test_vpn_with_tagged_torrent_indexer_passes() {
