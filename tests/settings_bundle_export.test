@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -u
+
+# Build a throwaway install with known settings, generated AND user-supplied.
+_make_install() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/config/prowlarr" "$root/config/sabnzbd"
+  cat > "$root/.env" <<'ENV'
+DOWNLOADS_DIR=/mnt/videos/downloads
+COMPLETED_DIR=/mnt/videos/completed
+ALLOW_NON_MOUNTPOINT=0
+USENET_SERVER_HOST=news.example.net
+USENET_SERVER_USERNAME=someuser
+USENET_SERVER_PASSWORD=somepass
+VPN_SERVICE_PROVIDER=nordvpn
+WIREGUARD_PRIVATE_KEY=SECRETKEYSECRETKEYSECRETKEYSECRETKEYSECRET=
+HOST_LAN_IP=192.168.1.10
+LAN_SUBNET=192.168.1.0/24
+SABNZBD_API_KEY=generated0000
+QBITTORRENT_PASSWORD=adminadmin
+COMPOSE_PROFILES=vpn
+ENV
+  local db="$root/config/prowlarr/prowlarr.db"
+  sqlite3 "$db" 'CREATE TABLE Tags (Id INTEGER PRIMARY KEY AUTOINCREMENT, Label TEXT NOT NULL);'
+  sqlite3 "$db" 'CREATE TABLE Indexers ("Id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "Name" TEXT NOT NULL, "Implementation" TEXT NOT NULL, "Settings" TEXT, "ConfigContract" TEXT, "Enable" INTEGER, "Priority" INTEGER NOT NULL, "Added" DATETIME NOT NULL, "Redirect" INTEGER NOT NULL, "AppProfileId" INTEGER NOT NULL, "Tags" TEXT, "DownloadClientId" INTEGER NOT NULL);'
+  sqlite3 "$db" "INSERT INTO Tags (Id,Label) VALUES (7,'byparr');"
+  sqlite3 "$db" "INSERT INTO Indexers (Name,Implementation,Settings,ConfigContract,Enable,Priority,Added,Redirect,AppProfileId,Tags,DownloadClientId) VALUES ('NZBgeek','Newznab','{\"apiKey\":\"indexerkey\"}','NewznabSettings',1,25,'2026-01-01',0,1,'[]',0);"
+  sqlite3 "$db" "INSERT INTO Indexers (Name,Implementation,Settings,ConfigContract,Enable,Priority,Added,Redirect,AppProfileId,Tags,DownloadClientId) VALUES ('Sample Tracker','Cardigann','{\"definitionFile\":\"sample\"}','CardigannSettings',1,25,'2026-01-01',0,1,'[7]',0);"
+  cat > "$root/config/sabnzbd/sabnzbd.ini" <<'INI'
+[misc]
+api_key = generated0000
+complete_dir = /downloads/completed
+pre_check = 1
+[categories]
+[[*]]
+priority = 0
+[[movies]]
+priority = -100
+script = move-finished.sh
+[servers]
+[[server1]]
+host = news.example.net
+username = someuser
+password = somepass
+INI
+  echo "$root"
+}
+
+_export() {  # _export <install> -> bundle dir
+  local out; out=$(mktemp -d)
+  scripts/settings-bundle export "$1" "$out" >/dev/null
+  echo "$out"
+}
+
+test_export_writes_all_four_members() {
+  local inst; inst=$(_make_install)
+  local b; b=$(_export "$inst")
+  [[ -f "$b/SETTINGS-MANIFEST" ]]
+  [[ -f "$b/env.subset" ]]
+  [[ -f "$b/indexers.json" ]]
+  [[ -f "$b/sabnzbd.subset.ini" ]]
+  rm -rf "$inst" "$b"
+}
+
+test_export_captures_user_supplied_env() {
+  local inst; inst=$(_make_install)
+  local b; b=$(_export "$inst")
+  grep -q '^DOWNLOADS_DIR=/mnt/videos/downloads$' "$b/env.subset"
+  grep -q '^USENET_SERVER_PASSWORD=somepass$' "$b/env.subset"
+  rm -rf "$inst" "$b"
+}
+
+test_export_excludes_secrets_and_generated_values() {
+  # The test that stops a future change quietly widening the bundle.
+  local inst; inst=$(_make_install)
+  local b; b=$(_export "$inst")
+  ! grep -q 'WIREGUARD_PRIVATE_KEY' "$b/env.subset"
+  ! grep -q 'VPN_SERVICE_PROVIDER' "$b/env.subset"
+  ! grep -q 'HOST_LAN_IP' "$b/env.subset"
+  ! grep -q 'LAN_SUBNET' "$b/env.subset"
+  ! grep -q 'SABNZBD_API_KEY' "$b/env.subset"
+  ! grep -q 'QBITTORRENT_PASSWORD' "$b/env.subset"
+  ! grep -q 'COMPOSE_PROFILES' "$b/env.subset"
+  rm -rf "$inst" "$b"
+}
+
+test_export_carries_tag_labels_not_ids() {
+  local inst; inst=$(_make_install)
+  local b; b=$(_export "$inst")
+  # Sample Tracker carries tag id 7 = label "byparr"; the bundle must say byparr.
+  python3 -c "
+import json,sys
+rows=json.load(open('$b/indexers.json'))
+st=[r for r in rows if r['Name']=='Sample Tracker'][0]
+assert st['TagLabels']==['byparr'], st
+assert 'Tags' not in st, st
+nz=[r for r in rows if r['Name']=='NZBgeek'][0]
+assert nz['TagLabels']==[], nz
+assert json.loads(nz['Settings'])['apiKey']=='indexerkey'
+"
+  rm -rf "$inst" "$b"
+}
+
+test_export_sab_subset_keeps_categories_drops_api_key_and_server() {
+  local inst; inst=$(_make_install)
+  local b; b=$(_export "$inst")
+  grep -q '^\[categories\]' "$b/sabnzbd.subset.ini"
+  grep -q '^\[\[movies\]\]' "$b/sabnzbd.subset.ini"
+  grep -q 'pre_check' "$b/sabnzbd.subset.ini"
+  ! grep -q 'api_key' "$b/sabnzbd.subset.ini"
+  ! grep -q 'server1' "$b/sabnzbd.subset.ini"
+  ! grep -q 'somepass' "$b/sabnzbd.subset.ini"
+  rm -rf "$inst" "$b"
+}
+
+test_export_refuses_an_install_without_env() {
+  local root; root=$(mktemp -d)
+  local out; out=$(mktemp -d)
+  ! scripts/settings-bundle export "$root" "$out" >/dev/null 2>&1
+  rm -rf "$root" "$out"
+}
