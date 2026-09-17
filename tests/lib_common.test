@@ -41,6 +41,34 @@ test_validate_ipv4_rejects_non_ip() {
   refute validate_ipv4 "192.168.1.1.1"
 }
 
+test_validate_host_accepts_service_name() {
+  validate_host "qbittorrent"
+}
+
+test_validate_host_accepts_ipv4() {
+  validate_host "192.168.1.10"
+}
+
+test_validate_host_accepts_dotted_hostname() {
+  validate_host "my-host.local"
+}
+
+test_validate_host_rejects_empty() {
+  refute validate_host ""
+}
+
+test_validate_host_rejects_garbage() {
+  refute validate_host "not a host!"
+}
+
+test_validate_host_rejects_leading_hyphen() {
+  refute validate_host "-qbittorrent"
+}
+
+test_validate_host_rejects_trailing_hyphen() {
+  refute validate_host "qbittorrent-"
+}
+
 test_validate_cidr_accepts_valid() {
   validate_cidr "192.168.1.0/24"
   validate_cidr "10.0.0.0/8"

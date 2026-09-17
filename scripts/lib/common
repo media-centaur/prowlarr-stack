@@ -119,6 +119,27 @@ validate_ipv4() {
   return 0
 }
 
+# validate_host <value>
+# Accepts an IPv4 address or a DNS label (a compose service name such as
+# `qbittorrent`, or a dotted hostname). Prowlarr reaches the download clients
+# over the compose bridge now, so a bare service name is the normal case; an
+# IPv4 address remains valid for a client reached over the LAN.
+validate_host() {
+  local host="${1:-}"
+  if [[ -z "$host" ]]; then
+    echo "error: host is empty" >&2
+    return 1
+  fi
+  if validate_ipv4 "$host" 2>/dev/null; then
+    return 0
+  fi
+  if [[ "$host" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$ ]]; then
+    return 0
+  fi
+  echo "error: '$host' is not a valid IPv4 address or hostname" >&2
+  return 1
+}
+
 # validate_cidr <cidr>
 validate_cidr() {
   local cidr="${1:-}"

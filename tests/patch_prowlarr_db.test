@@ -40,6 +40,23 @@ test_patcher_validates_host() {
   rm -f "$tmp"
 }
 
+test_patcher_accepts_a_container_dns_host() {
+  local tmp; tmp=$(mktemp --suffix=.db)
+  cp "$FIXTURE" "$tmp"
+  "$SCRIPT" "$tmp" "qbittorrent" "8080"
+  local host
+  host=$(sqlite3 "$tmp" "SELECT json_extract(Settings,'\$.host') FROM DownloadClients WHERE Implementation='QBittorrent' LIMIT 1;")
+  [[ "$host" == "qbittorrent" ]]
+  rm -f "$tmp"
+}
+
+test_patcher_rejects_a_host_that_is_neither() {
+  local tmp; tmp=$(mktemp --suffix=.db)
+  cp "$FIXTURE" "$tmp"
+  refute "$SCRIPT" "$tmp" "not a host!" "8080" 2>/dev/null
+  rm -f "$tmp"
+}
+
 test_patcher_writes_password_when_provided() {
   local tmp; tmp=$(mktemp --suffix=.db)
   cp "$FIXTURE" "$tmp"

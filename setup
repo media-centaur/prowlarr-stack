@@ -343,11 +343,11 @@ else
 fi
 
 # --- Phase 6: patch Prowlarr DB ---
-# In VPN mode prowlarr and qBittorrent share gluetun's network namespace, so
-# prowlarr reaches qBT via 127.0.0.1. In direct mode they're on different
-# networks; prowlarr reaches qBT via the host's LAN IP.
-qbt_host="$lan_ip"
-[[ "$qbt_use_vpn" == "1" ]] && qbt_host="127.0.0.1"
+# Prowlarr is on the compose bridge, so it reaches the clients by service name.
+# A tunneled qBittorrent shares gluetun's namespace and has no name of its own,
+# so it is addressed as gluetun.
+qbt_host="qbittorrent"
+[[ "$qbt_use_vpn" == "1" ]] && qbt_host="gluetun"
 log_phase "patching prowlarr.db → qbittorrent@${qbt_host}:8080"
 if [[ -f config/prowlarr/prowlarr.db ]]; then
   printf '%s' "$qbt_pw" | ./scripts/patch-prowlarr-db config/prowlarr/prowlarr.db "$qbt_host" 8080 -
@@ -357,10 +357,11 @@ else
 fi
 
 # --- Phase 6b: SABnzbd (usenet) config + DB wiring ---
-# SABnzbd always runs direct (never in gluetun's netns), so Prowlarr reaches it
-# at the host LAN IP:8085. Provider credentials come from .env (empty until the
-# user has a Usenet account); the API key is generated once and shared into both
-# SABnzbd's config and Prowlarr's download-client row.
+# SABnzbd always runs direct (never in gluetun's netns); Prowlarr reaches it
+# over the compose bridge by service name (sabnzbd:8085). Provider credentials
+# come from .env (empty until the user has a Usenet account); the API key is
+# generated once and shared into both SABnzbd's config and Prowlarr's
+# download-client row.
 log_phase "SABnzbd (usenet)"
 
 sab_api_key=$(read_env_value "$ENV_FILE" SABNZBD_API_KEY)
@@ -436,8 +437,8 @@ if [[ -f config/prowlarr/prowlarr.db ]]; then
   # no row yet — materialize it here with the same idempotent migration (no-op
   # when the row is already present) so the patch below never hits an empty set.
   ./migrations/0003-add-sabnzbd-download-client . >/dev/null
-  printf '%s' "$sab_api_key" | ./scripts/patch-prowlarr-sab config/prowlarr/prowlarr.db "$lan_ip" 8085 -
-  log_ok "prowlarr.db" "SABnzbd download-client host = $lan_ip:8085, API key synced"
+  printf '%s' "$sab_api_key" | ./scripts/patch-prowlarr-sab config/prowlarr/prowlarr.db "sabnzbd" 8085 -
+  log_ok "prowlarr.db" "SABnzbd download-client host = sabnzbd:8085, API key synced"
 else
   log_warn "config/prowlarr/prowlarr.db not present — skipping SABnzbd DB patch"
 fi

@@ -2,8 +2,10 @@
 # Idempotently rewrite the SABnzbd download-client row in a Prowlarr DB.
 # Usage: patch-prowlarr-sab <db_path> <host> <port> [apikey|-]
 #
-# SABnzbd always runs direct (never in gluetun's netns), so <host> is the host
-# LAN IP. When [apikey] is '-', it is read from stdin to avoid leaking it via argv.
+# SABnzbd always runs direct (never in gluetun's netns) and Prowlarr reaches
+# it over the compose bridge by service name (`sabnzbd`); an IPv4 address is
+# also accepted for a client reached over the LAN. When [apikey] is '-', it
+# is read from stdin to avoid leaking it via argv.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -32,8 +34,8 @@ if [[ ! -f "$db" ]]; then
   die "DB not found: $db"
 fi
 
-if ! validate_ipv4 "$host" 2>/dev/null; then
-  die "host must be a valid IPv4 address (got: $host)"
+if ! validate_host "$host" 2>/dev/null; then
+  die "host must be an IPv4 address or a hostname (got: $host)"
 fi
 
 if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then

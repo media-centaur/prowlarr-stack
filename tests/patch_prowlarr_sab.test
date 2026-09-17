@@ -43,3 +43,17 @@ test_validates_host() {
   refute "$SCRIPT" "$db" "not-an-ip" "8085" 2>/dev/null
   rm -f "$db"
 }
+
+test_accepts_a_container_dns_host() {
+  local db; db=$(_make_db)
+  "$SCRIPT" "$db" "sabnzbd" "8085"
+  local h; h=$(sqlite3 "$db" "SELECT json_extract(Settings,'\$.host') FROM DownloadClients WHERE Implementation='Sabnzbd' LIMIT 1;")
+  [[ "$h" == "sabnzbd" ]]
+  rm -f "$db"
+}
+
+test_rejects_a_host_that_is_neither() {
+  local db; db=$(_make_db)
+  refute "$SCRIPT" "$db" "not a host!" "8085" 2>/dev/null
+  rm -f "$db"
+}
