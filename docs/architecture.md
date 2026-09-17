@@ -129,12 +129,13 @@ prowlarr-stack/
 3. **Write `.env`** — atomic (tmp file + rename), `chmod 600` before rename. Writes `COMPOSE_PROFILES=vpn` when a VPN is configured, which is what brings gluetun and byparr into the project at all, and `COMPOSE_FILE` for the qBT overlay (`docker-compose.yml` alone in direct mode, `docker-compose.yml:docker-compose.qbt-vpn.yml` in tunneled mode).
 4. **Seed `config/`** — copy from `defaults/` if the destination doesn't exist (idempotent; re-runs don't clobber state).
 5. **Patch `prowlarr.db`** — rewrites the download-client rows to compose service names, since Prowlarr reaches the clients over the bridge: `qbittorrent:8080` direct, `gluetun:8080` when tunneled (a tunneled client shares gluetun's namespace and has no name of its own), `sabnzbd:8080`. With a VPN configured, also seeds the `vpn` tag and the `Http` indexer proxy at `gluetun:8888`, and re-points byparr's FlareSolverr proxy to `gluetun:8191`. Uses SQLite's `json_set`, so it's idempotent.
-6. **Storage paths** — `validate_storage_paths` checks each of `DOWNLOADS_DIR` / `COMPLETED_DIR` via `findmnt --target`: each must exist as a directory and (unless `ALLOW_NON_MOUNTPOINT=1`) must live on a mount that isn't `/`. Subdirectories of a mount count — `/mnt/videos/downloads` inside a `/mnt/videos` mount is fine. In interactive mode, offers to opt into `ALLOW_NON_MOUNTPOINT=1` if a path is on the root fs; in `--non-interactive` mode (used by `restore`), hard-fails. The systemd unit gets `RequiresMountsFor=` for these paths unless the opt-out is active.
-7. **Systemd user service** — installs `~/.config/systemd/user/prowlarr-stack.service`, runs `daemon-reload + enable`.
-8. **Start** — `docker compose up -d`.
-9. **Wait for tunnel** — polls gluetun's healthcheck until green (60s timeout). Skipped entirely with no VPN configured.
-10. **Tag torrent indexers** — `scripts/tag-vpn-indexers` puts the `vpn` tag on every enabled torrent-protocol indexer, so the proxy seeded in phase 5 actually applies to something. Runs before the check below, which would otherwise fail on an untagged indexer. Non-fatal.
-11. **Verify isolation** — asserts every enabled torrent indexer carries the `vpn` tag, and that the tunnel's exit IP differs from the direct one. With no VPN, asserts instead that no enabled torrent indexer exists — one could not reach an ISP-blocked site, and would leak if it could. Dumps gluetun's recent log on failure.
+6. **SABnzbd config** — stops SABnzbd (it rewrites `sabnzbd.ini` on shutdown, so a running instance would clobber the write), then injects the generated API key and the news-server account from `.env`, converges the staging layout, and adds `sabnzbd` to `host_whitelist`. SABnzbd's DNS-rebinding guard rejects any `Host` header that is not `localhost`, an IP literal, or whitelisted, and Prowlarr addresses it by service name; entries already in the list are kept. Idempotent.
+7. **Storage paths** — `validate_storage_paths` checks each of `DOWNLOADS_DIR` / `COMPLETED_DIR` via `findmnt --target`: each must exist as a directory and (unless `ALLOW_NON_MOUNTPOINT=1`) must live on a mount that isn't `/`. Subdirectories of a mount count — `/mnt/videos/downloads` inside a `/mnt/videos` mount is fine. In interactive mode, offers to opt into `ALLOW_NON_MOUNTPOINT=1` if a path is on the root fs; in `--non-interactive` mode (used by `restore`), hard-fails. The systemd unit gets `RequiresMountsFor=` for these paths unless the opt-out is active.
+8. **Systemd user service** — installs `~/.config/systemd/user/prowlarr-stack.service`, runs `daemon-reload + enable`.
+9. **Start** — `docker compose up -d`.
+10. **Wait for tunnel** — polls gluetun's healthcheck until green (60s timeout). Skipped entirely with no VPN configured.
+11. **Tag torrent indexers** — `scripts/tag-vpn-indexers` puts the `vpn` tag on every enabled torrent-protocol indexer, so the proxy seeded in phase 5 actually applies to something. Runs before the check below, which would otherwise fail on an untagged indexer. Non-fatal.
+12. **Verify isolation** — asserts every enabled torrent indexer carries the `vpn` tag, and that the tunnel's exit IP differs from the direct one. With no VPN, asserts instead that no enabled torrent indexer exists — one could not reach an ISP-blocked site, and would leak if it could. Dumps gluetun's recent log on failure.
 
 `./setup --reconfigure` forces the configuration prompts to re-appear (existing values shown as defaults). `./setup --non-interactive` skips prompts and fails fast on any missing required variable — used by `./update`.
 
@@ -146,7 +147,7 @@ prowlarr-stack/
 2. `./setup --non-interactive` — applies any config changes that arrived with the pull.
 3. `docker compose pull` — fetch latest images.
 4. `systemctl --user restart prowlarr-stack` — recreate containers.
-5. `./check` — re-verify isolation.
+5. `./check` — service health, Prowlarr's connection to each download client, VPN isolation.
 
 Flags: `--code-only` (skips image pull), `--images-only` (skips git/setup), `--dry-run` (prints the plan without executing anything).
 

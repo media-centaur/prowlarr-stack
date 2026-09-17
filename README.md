@@ -70,8 +70,9 @@ How to add and tune your indexers (and which ones to disable when searches feel 
 This is a **transaction**: it takes a pre-flight backup, downloads the latest
 release (verifying its SHA256), preserves your `.env` and `config/`, swaps in the
 new version, runs any pending DB migrations, restarts, and verifies gluetun
-health, service health, and VPN isolation. If anything fails — a bad migration,
-gluetun not coming up, a service not answering, isolation broken — it
+health, service health, Prowlarr's connection to each download client, and VPN
+isolation. If anything fails — a bad migration, gluetun not coming up, a service
+not answering, a download client Prowlarr can't reach, isolation broken — it
 **automatically rolls back** to the version you were on.
 
 Pin to a specific version (upgrade, downgrade, or roll back):
