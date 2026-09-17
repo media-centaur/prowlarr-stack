@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -u
+
+# Resolve the compose project with a given .env, echoing the service list.
+_services() {  # _services <env-contents>
+  local root; root=$(mktemp -d)
+  cp docker-compose.yml docker-compose.qbt-vpn.yml "$root/"
+  printf '%s\n' "$1" > "$root/.env"
+  (cd "$root" && docker compose config --services 2>&1 | sort | tr '\n' ' ')
+  rm -rf "$root"
+}
+
+test_vpn_services_absent_without_profile() {
+  local out; out=$(_services "DOWNLOADS_DIR=/tmp/d
+COMPLETED_DIR=/tmp/c")
+  [[ "$out" != *gluetun* ]]
+  [[ "$out" != *byparr* ]]
+  [[ "$out" == *prowlarr* ]]
+  [[ "$out" == *sabnzbd* ]]
+  [[ "$out" == *qbittorrent* ]]
+}
+
+test_vpn_services_present_with_profile() {
+  local out; out=$(_services "COMPOSE_PROFILES=vpn
+DOWNLOADS_DIR=/tmp/d
+COMPLETED_DIR=/tmp/c")
+  [[ "$out" == *gluetun* ]]
+  [[ "$out" == *byparr* ]]
+  [[ "$out" == *prowlarr* ]]
+}
+
+test_qbt_vpn_overlay_without_profile_is_rejected() {
+  local out; out=$(_services "COMPOSE_FILE=docker-compose.yml:docker-compose.qbt-vpn.yml
+DOWNLOADS_DIR=/tmp/d
+COMPLETED_DIR=/tmp/c")
+  [[ "$out" == *"depends on undefined service"* ]]
+}
