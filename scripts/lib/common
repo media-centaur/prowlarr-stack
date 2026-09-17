@@ -701,19 +701,30 @@ wait_for_http() {
   done
 }
 
+# vpn_profile_active [env_file]
+# True when the vpn compose profile is active, i.e. gluetun/byparr exist.
+vpn_profile_active() {
+  local f="${1:-.env}"
+  [[ "$(read_env_value "$f" COMPOSE_PROFILES 2>/dev/null)" == *vpn* ]]
+}
+
 # verify_services [timeout_seconds]
 # Asserts every application service actually answers, not just that the tunnel
 # is up. verify_isolation covers prowlarr and qBittorrent only (via their
 # external IPs), which left byparr and SABnzbd unverified — an image bump that
 # broke either one passed the upgrade gate and was never rolled back.
-# Returns 0 only if all three probes succeed.
+# Returns 0 only if all three probes succeed. byparr is only probed under the
+# vpn profile — without it, gluetun/byparr are absent from the compose project
+# by design, so a non-answering solver there is not a failure.
 verify_services() {
   local timeout="${1:-120}"
   local failed=0
   log_phase "service health"
 
-  # Prowlarr's /ping is unauthenticated and returns {"status": "OK"}.
-  if wait_for_http gluetun "http://127.0.0.1:9696/ping" "OK" "$timeout"; then
+  # Prowlarr's /ping is unauthenticated and returns {"status": "OK"}. Prowlarr
+  # left gluetun's network namespace and publishes its own port, so it's probed
+  # directly rather than through gluetun.
+  if wait_for_http prowlarr "http://127.0.0.1:9696/ping" "OK" "$timeout"; then
     log_ok "prowlarr" "API responding (:9696/ping)"
   else
     log_fail "prowlarr" "API did not respond within ${timeout}s"
@@ -721,14 +732,16 @@ verify_services() {
     failed=1
   fi
 
-  # byparr answers /health with {"msg":"Byparr is working!",...} on 8191, the
-  # same port Prowlarr's FlareSolverr indexer proxy talks to.
-  if wait_for_http gluetun "http://127.0.0.1:8191/health" "Byparr" "$timeout"; then
-    log_ok "byparr" "solver responding (:8191/health)"
-  else
-    log_fail "byparr" "solver did not respond within ${timeout}s"
-    log_info "check: docker logs byparr"
-    failed=1
+  if vpn_profile_active; then
+    # byparr answers /health with {"msg":"Byparr is working!",...} on 8191, the
+    # same port Prowlarr's FlareSolverr indexer proxy talks to.
+    if wait_for_http gluetun "http://127.0.0.1:8191/health" "Byparr" "$timeout"; then
+      log_ok "byparr" "solver responding (:8191/health)"
+    else
+      log_fail "byparr" "solver did not respond within ${timeout}s"
+      log_info "check: docker logs byparr"
+      failed=1
+    fi
   fi
 
   # SABnzbd's version endpoint needs no API key. This proves the WebUI is up;

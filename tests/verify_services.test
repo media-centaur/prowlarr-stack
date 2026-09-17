@@ -66,9 +66,11 @@ test_verify_services_fails_when_prowlarr_down() {
 
 test_verify_services_fails_when_byparr_down() {
   # The regression this gate exists for: before it, a broken solver passed the
-  # upgrade check and was never rolled back.
+  # upgrade check and was never rolled back. Byparr is only probed under the
+  # vpn profile, so this assertion needs it active.
   _all_healthy
   unset 'RESPONSES[8191/health]'
+  vpn_profile_active() { return 0; }
   ! verify_services 2 >/dev/null 2>&1
 }
 
@@ -80,11 +82,49 @@ test_verify_services_fails_when_sabnzbd_down() {
 
 test_verify_services_reports_every_failure_not_just_the_first() {
   # All three down: the output must name all three, so one run tells the
-  # operator everything that is broken.
+  # operator everything that is broken. That only makes sense with byparr in
+  # play at all, so the vpn profile must read as active for this assertion.
   RESPONSES=()
+  vpn_profile_active() { return 0; }
   local out
   out=$(verify_services 2 2>&1) || true
   grep -q "prowlarr" <<<"$out" && grep -q "byparr" <<<"$out" && grep -q "sabnzbd" <<<"$out"
+}
+
+test_prowlarr_probe_targets_the_prowlarr_container() {
+  _all_healthy
+  # Answer :9696 ONLY when probed in the prowlarr container. If verify_services
+  # still probes through gluetun, prowlarr reads as down and this fails.
+  http_probe_in_container() {
+    local container="$1" url="$2"
+    if [[ "$url" == *"9696/ping"* ]]; then
+      [[ "$container" == "prowlarr" ]] || return 1
+      echo '{"status": "OK"}'
+      return 0
+    fi
+    local key
+    for key in "${!RESPONSES[@]}"; do
+      [[ "$url" == *"$key"* ]] && { echo "${RESPONSES[$key]}"; return 0; }
+    done
+    return 1
+  }
+  verify_services 5 >/dev/null 2>&1
+}
+
+test_byparr_is_not_probed_without_the_vpn_profile() {
+  # byparr is absent from the project entirely when the profile is off, so a
+  # non-answering solver must not be a failure.
+  _all_healthy
+  unset 'RESPONSES[8191/health]'
+  vpn_profile_active() { return 1; }
+  verify_services 2 >/dev/null 2>&1
+}
+
+test_byparr_is_probed_under_the_vpn_profile() {
+  _all_healthy
+  unset 'RESPONSES[8191/health]'
+  vpn_profile_active() { return 0; }
+  ! verify_services 2 >/dev/null 2>&1
 }
 
 test_verify_services_tolerates_sabnzbd_without_usenet_credentials() {
