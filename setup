@@ -62,69 +62,91 @@ allow_non_mountpoint=$(read_env_value "$ENV_FILE" ALLOW_NON_MOUNTPOINT)
 qbt_use_vpn=$(read_env_value "$ENV_FILE" QBITTORRENT_USE_VPN)
 [[ -z "$qbt_use_vpn" ]] && qbt_use_vpn=0
 
-# Provider selection (first, since it drives what else we ask for).
+# Provider selection (first, since it drives what else we ask for). VPN
+# routing is optional — a usenet-only install never needs one; only torrent
+# indexers do (most are ISP-blocked, and peers see your address).
 provider=$(read_env_value "$ENV_FILE" VPN_SERVICE_PROVIDER)
 if [[ -z "$provider" || $RECONFIGURE -eq 1 ]]; then
-  if [[ $NONINTERACTIVE -eq 1 ]]; then
-    die "VPN_SERVICE_PROVIDER is not set in .env and --non-interactive was passed"
-  fi
-  log_info "Supported providers: ${!VPN_PROVIDERS[*]}"
-  provider=$(prompt_with_default "VPN provider" "${provider:-nordvpn}" validate_vpn_provider)
-fi
-validate_vpn_provider "$provider" >/dev/null 2>&1 || die "invalid VPN_SERVICE_PROVIDER in .env: $provider"
-
-# Provider-specific key source hint, then the key prompt.
-if [[ -z "$wg_key" || $RECONFIGURE -eq 1 ]]; then
-  if [[ $NONINTERACTIVE -eq 1 ]]; then
-    die "WIREGUARD_PRIVATE_KEY is not set in .env and --non-interactive was passed"
-  fi
-  log_info "$(provider_key_hint "$provider")"
-  wg_key=$(prompt_secret "WireGuard private key (44-char base64)" validate_wg_key)
-fi
-validate_wg_key "$wg_key" >/dev/null 2>&1 || die "invalid WireGuard key in .env: ${wg_key:0:4}…"
-
-# Conditional: addresses.
-wg_addresses=$(read_env_value "$ENV_FILE" WIREGUARD_ADDRESSES)
-if provider_needs_addresses "$provider"; then
-  if [[ -z "$wg_addresses" || $RECONFIGURE -eq 1 ]]; then
-    if [[ $NONINTERACTIVE -eq 1 ]]; then
-      # Only listed providers that strictly require it should die; unknown
-      # providers in non-interactive mode accept blank silently.
-      if [[ -n "${VPN_PROVIDERS[$provider]:-}" ]]; then
-        die "$provider requires WIREGUARD_ADDRESSES; not set in .env"
-      fi
-    else
-      wg_addresses=$(prompt_with_default "WireGuard addresses (e.g. 10.64.222.21/32, blank if unused)" "${wg_addresses:- }")
-      [[ "$wg_addresses" == " " ]] && wg_addresses=""
-    fi
-  fi
-fi
-
-# Conditional: preshared key.
-wg_preshared=$(read_env_value "$ENV_FILE" WIREGUARD_PRESHARED_KEY)
-if provider_needs_preshared "$provider"; then
-  if [[ -z "$wg_preshared" || $RECONFIGURE -eq 1 ]]; then
-    if [[ $NONINTERACTIVE -eq 1 ]]; then
-      if [[ -n "${VPN_PROVIDERS[$provider]:-}" ]]; then
-        die "$provider requires WIREGUARD_PRESHARED_KEY; not set in .env"
-      fi
-    else
-      # Empty is acceptable for unknown providers; validator runs only if non-empty.
-      wg_preshared=$(prompt_with_default "WireGuard preshared key (blank if unused)" "${wg_preshared:- }")
-      [[ "$wg_preshared" == " " ]] && wg_preshared=""
-      if [[ -n "$wg_preshared" ]]; then
-        validate_wg_key "$wg_preshared" 2>/dev/null || die "preshared key has wrong format (expected 44-char base64)"
-      fi
-    fi
-  fi
-fi
-
-# Countries.
-if [[ -z "$countries" ]]; then countries="Netherlands"; fi
-if [[ $RECONFIGURE -eq 1 || -z "$(read_env_value "$ENV_FILE" SERVER_COUNTRIES)" ]]; then
   if [[ $NONINTERACTIVE -eq 0 ]]; then
-    countries=$(prompt_with_default "Exit country (or comma-separated list)" "$countries")
+    echo ""
+    log_info "VPN routing (optional)"
+    log_info "  A VPN is used ONLY for torrent indexers: most are ISP-blocked, and"
+    log_info "  peers see your address. Usenet indexers never need one."
+    log_info "  Leave blank for a usenet-only stack."
+    log_info "Supported providers: ${!VPN_PROVIDERS[*]}"
+    provider=$(prompt_with_default "VPN provider (blank for none)" "${provider:-}")
   fi
+fi
+
+if [[ -n "$provider" ]]; then
+  validate_vpn_provider "$provider" >/dev/null 2>&1 || die "invalid VPN_SERVICE_PROVIDER: $provider"
+else
+  log_info "no VPN configured — torrent indexers will be unavailable"
+fi
+
+# Provider-specific key source hint, then the key prompt. Skipped entirely
+# when no provider is configured — there's no VPN to key into.
+if [[ -n "$provider" ]]; then
+  if [[ -z "$wg_key" || $RECONFIGURE -eq 1 ]]; then
+    if [[ $NONINTERACTIVE -eq 1 ]]; then
+      die "WIREGUARD_PRIVATE_KEY is not set in .env and --non-interactive was passed"
+    fi
+    log_info "$(provider_key_hint "$provider")"
+    wg_key=$(prompt_secret "WireGuard private key (44-char base64)" validate_wg_key)
+  fi
+  validate_wg_key "$wg_key" >/dev/null 2>&1 || die "invalid WireGuard key in .env: ${wg_key:0:4}…"
+
+  # Conditional: addresses.
+  wg_addresses=$(read_env_value "$ENV_FILE" WIREGUARD_ADDRESSES)
+  if provider_needs_addresses "$provider"; then
+    if [[ -z "$wg_addresses" || $RECONFIGURE -eq 1 ]]; then
+      if [[ $NONINTERACTIVE -eq 1 ]]; then
+        # Only listed providers that strictly require it should die; unknown
+        # providers in non-interactive mode accept blank silently.
+        if [[ -n "${VPN_PROVIDERS[$provider]:-}" ]]; then
+          die "$provider requires WIREGUARD_ADDRESSES; not set in .env"
+        fi
+      else
+        wg_addresses=$(prompt_with_default "WireGuard addresses (e.g. 10.64.222.21/32, blank if unused)" "${wg_addresses:- }")
+        [[ "$wg_addresses" == " " ]] && wg_addresses=""
+      fi
+    fi
+  fi
+
+  # Conditional: preshared key.
+  wg_preshared=$(read_env_value "$ENV_FILE" WIREGUARD_PRESHARED_KEY)
+  if provider_needs_preshared "$provider"; then
+    if [[ -z "$wg_preshared" || $RECONFIGURE -eq 1 ]]; then
+      if [[ $NONINTERACTIVE -eq 1 ]]; then
+        if [[ -n "${VPN_PROVIDERS[$provider]:-}" ]]; then
+          die "$provider requires WIREGUARD_PRESHARED_KEY; not set in .env"
+        fi
+      else
+        # Empty is acceptable for unknown providers; validator runs only if non-empty.
+        wg_preshared=$(prompt_with_default "WireGuard preshared key (blank if unused)" "${wg_preshared:- }")
+        [[ "$wg_preshared" == " " ]] && wg_preshared=""
+        if [[ -n "$wg_preshared" ]]; then
+          validate_wg_key "$wg_preshared" 2>/dev/null || die "preshared key has wrong format (expected 44-char base64)"
+        fi
+      fi
+    fi
+  fi
+
+  # Countries.
+  if [[ -z "$countries" ]]; then countries="Netherlands"; fi
+  if [[ $RECONFIGURE -eq 1 || -z "$(read_env_value "$ENV_FILE" SERVER_COUNTRIES)" ]]; then
+    if [[ $NONINTERACTIVE -eq 0 ]]; then
+      countries=$(prompt_with_default "Exit country (or comma-separated list)" "$countries")
+    fi
+  fi
+else
+  # No provider — clear any stale VPN-only fields so a stack that used to be
+  # VPN-configured and is now reconfigured without one doesn't keep secrets
+  # around, and so writing them below (blank) is unconditionally safe.
+  wg_key=""
+  wg_addresses=""
+  wg_preshared=""
+  countries=""
 fi
 
 # LAN IP — auto-detect if missing.
@@ -189,22 +211,28 @@ fi
 # Tunneling qBT only helps if you specifically need qBT's IP hidden from
 # peers, and you accept the speed hit + (for most providers) the loss of
 # inbound peers, which makes seeding outgoing-only.
-if [[ -z "$(read_env_value "$ENV_FILE" QBITTORRENT_USE_VPN)" || $RECONFIGURE -eq 1 ]]; then
-  if [[ $NONINTERACTIVE -eq 0 ]]; then
-    echo ""
-    log_info "qBittorrent network routing"
-    log_info "  ${COLOR_BOLD}Direct (recommended):${COLOR_RESET} qBT goes via your ISP — full speed, full"
-    log_info "    peer connectivity for seeding. Your Prowlarr indexer browsing is still"
-    log_info "    routed through the VPN regardless of this choice."
-    log_info "  ${COLOR_BOLD}Tunneled:${COLOR_RESET} qBT shares gluetun's namespace. Your IP is hidden from"
-    log_info "    peers, BUT downloads are capped at VPN speed and most providers don't"
-    log_info "    forward inbound ports — seeding becomes outgoing-only."
-    if prompt_yes_no "Route qBittorrent through the VPN tunnel?" n; then
-      qbt_use_vpn=1
-    else
-      qbt_use_vpn=0
+# Only offered when a provider is configured — with no VPN there's nothing
+# to tunnel qBT through, so it stays direct.
+if [[ -n "$provider" ]]; then
+  if [[ -z "$(read_env_value "$ENV_FILE" QBITTORRENT_USE_VPN)" || $RECONFIGURE -eq 1 ]]; then
+    if [[ $NONINTERACTIVE -eq 0 ]]; then
+      echo ""
+      log_info "qBittorrent network routing"
+      log_info "  ${COLOR_BOLD}Direct (recommended):${COLOR_RESET} qBT goes via your ISP — full speed, full"
+      log_info "    peer connectivity for seeding. Your Prowlarr indexer browsing is still"
+      log_info "    routed through the VPN regardless of this choice."
+      log_info "  ${COLOR_BOLD}Tunneled:${COLOR_RESET} qBT shares gluetun's namespace. Your IP is hidden from"
+      log_info "    peers, BUT downloads are capped at VPN speed and most providers don't"
+      log_info "    forward inbound ports — seeding becomes outgoing-only."
+      if prompt_yes_no "Route qBittorrent through the VPN tunnel?" n; then
+        qbt_use_vpn=1
+      else
+        qbt_use_vpn=0
+      fi
     fi
   fi
+else
+  qbt_use_vpn=0
 fi
 case "$qbt_use_vpn" in 0|1) ;; *) die "QBITTORRENT_USE_VPN must be 0 or 1 (got: $qbt_use_vpn)" ;; esac
 
@@ -221,6 +249,16 @@ write_env_value "$ENV_FILE" DOWNLOADS_DIR "$downloads_dir"
 write_env_value "$ENV_FILE" COMPLETED_DIR "$completed_dir"
 write_env_value "$ENV_FILE" ALLOW_NON_MOUNTPOINT "$allow_non_mountpoint"
 write_env_value "$ENV_FILE" QBITTORRENT_USE_VPN "$qbt_use_vpn"
+
+validate_vpn_combination "$provider" "$qbt_use_vpn" || die "invalid VPN configuration"
+
+# COMPOSE_PROFILES gates gluetun/byparr into (or out of) the compose project
+# (see docker-compose.yml). No provider → no VPN service to run.
+if [[ -n "$provider" ]]; then
+  write_env_value "$ENV_FILE" COMPOSE_PROFILES "vpn"
+else
+  write_env_value "$ENV_FILE" COMPOSE_PROFILES ""
+fi
 # COMPOSE_FILE is read by docker compose itself from .env — every `docker
 # compose` invocation in this dir picks up the right overlay automatically.
 if [[ "$qbt_use_vpn" == "1" ]]; then
@@ -457,18 +495,22 @@ docker compose up -d --force-recreate --remove-orphans
 log_ok "containers" "started (recreated for fresh bind mounts)"
 
 # --- Phase 10: wait for tunnel ---
-log_phase "waiting for gluetun tunnel (up to 60s)"
-if wait_for_gluetun_healthy 60; then
-  log_ok "gluetun" "healthy"
-else
-  log_fail "gluetun" "did not reach healthy state in 60s"
-  log_info "last 20 lines of gluetun log:"
-  docker logs --tail 20 gluetun 2>&1 | sed 's/^/      /' >&2
-  die "aborting — VPN tunnel failed to establish"
-fi
+# Skipped entirely without a provider — gluetun is absent from the compose
+# project (COMPOSE_PROFILES unset), so waiting on its health would hang.
+if [[ -n "$provider" ]]; then
+  log_phase "waiting for gluetun tunnel (up to 60s)"
+  if wait_for_gluetun_healthy 60; then
+    log_ok "gluetun" "healthy"
+  else
+    log_fail "gluetun" "did not reach healthy state in 60s"
+    log_info "last 20 lines of gluetun log:"
+    docker logs --tail 20 gluetun 2>&1 | sed 's/^/      /' >&2
+    die "aborting — VPN tunnel failed to establish"
+  fi
 
-# --- Phase 11: verify ---
-verify_isolation || die "VPN isolation verification FAILED — see above and check docker logs gluetun"
+  # --- Phase 11: verify ---
+  verify_isolation || die "VPN isolation verification FAILED — see above and check docker logs gluetun"
+fi
 
 # --- Phase 12: credentials summary ---
 log_phase "credentials & endpoints"

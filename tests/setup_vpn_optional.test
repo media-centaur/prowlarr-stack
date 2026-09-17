@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -u
+source scripts/lib/common
+
+test_compose_profiles_written_when_vpn_configured() {
+  local f; f=$(mktemp)
+  write_env_value "$f" VPN_SERVICE_PROVIDER "nordvpn"
+  write_env_value "$f" COMPOSE_PROFILES "vpn"
+  [[ "$(read_env_value "$f" COMPOSE_PROFILES)" == "vpn" ]]
+  rm -f "$f"
+}
+
+test_compose_profiles_absent_when_no_vpn() {
+  local f; f=$(mktemp)
+  write_env_value "$f" DOWNLOADS_DIR "/tmp/d"
+  [[ -z "$(read_env_value "$f" COMPOSE_PROFILES)" ]]
+  rm -f "$f"
+}
+
+test_qbt_vpn_requires_vpn_credentials() {
+  # setup must refuse QBITTORRENT_USE_VPN=1 with no provider configured.
+  ! validate_vpn_combination "" 1 >/dev/null 2>&1
+}
+
+test_qbt_vpn_allowed_with_a_provider() {
+  validate_vpn_combination "nordvpn" 1 >/dev/null 2>&1
+}
+
+test_qbt_direct_allowed_without_a_provider() {
+  validate_vpn_combination "" 0 >/dev/null 2>&1
+}

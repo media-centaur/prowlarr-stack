@@ -513,6 +513,10 @@ write_env_value() {
   fi
   chmod 600 "$tmp"
   mv "$tmp" "$file"
+  # A RETURN trap fires on the next function return in this shell, not just
+  # this one's — clear it now so it doesn't fire again (referencing an
+  # out-of-scope $tmp) when the caller returns.
+  trap - RETURN
 }
 
 # --- Interactive prompts ---
@@ -964,4 +968,16 @@ github_latest_release() {
     return 1
   fi
   echo "$tag"
+}
+
+# validate_vpn_combination <provider> <qbt_use_vpn>
+# Tunneling qBittorrent requires a VPN to tunnel through. Compose rejects the
+# combination at validation time too, but failing here gives a better message.
+validate_vpn_combination() {
+  local provider="$1" qbt="$2"
+  if [[ "$qbt" == "1" && -z "$provider" ]]; then
+    log_fail "config" "QBITTORRENT_USE_VPN=1 requires a VPN provider"
+    return 1
+  fi
+  return 0
 }
