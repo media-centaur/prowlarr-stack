@@ -74,7 +74,7 @@ if [[ -z "$provider" || $RECONFIGURE -eq 1 ]]; then
     log_info "  peers see your address. Usenet indexers never need one."
     log_info "  Leave blank for a usenet-only stack."
     log_info "Supported providers: ${!VPN_PROVIDERS[*]}"
-    provider=$(prompt_with_default "VPN provider (blank for none)" "${provider:-}")
+    provider=$(prompt_optional "VPN provider (blank for none)" "${provider:-}")
   fi
 fi
 

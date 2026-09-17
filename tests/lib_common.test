@@ -271,3 +271,30 @@ INNER
   [[ "$key" == "deadbeefdeadbeefdeadbeefdeadbeef" ]]
   rm -f "$tmp"
 }
+
+# --- prompt_optional ---
+# Regression: the VPN provider prompt used prompt_with_default, which rejects an
+# empty answer, so "blank for none" — the usenet-only stack — was unreachable
+# through the installer. Found by running ./install for real; no unit test
+# covered the prompt itself.
+
+test_prompt_optional_accepts_an_empty_answer() {
+  local out; out=$(printf '\n' | prompt_optional "thing" "" 2>/dev/null)
+  [[ -z "$out" ]]
+}
+
+test_prompt_optional_returns_a_given_value() {
+  local out; out=$(printf 'nordvpn\n' | prompt_optional "thing" "" 2>/dev/null)
+  [[ "$out" == "nordvpn" ]]
+}
+
+test_prompt_optional_uses_its_default_when_blank() {
+  local out; out=$(printf '\n' | prompt_optional "thing" "fallback" 2>/dev/null)
+  [[ "$out" == "fallback" ]]
+}
+
+test_prompt_with_default_still_requires_a_value() {
+  # Its contract is unchanged: empty re-prompts, so the next line is consumed.
+  local out; out=$(printf '\nvalue\n' | prompt_with_default "thing" "" 2>/dev/null)
+  [[ "$out" == "value" ]]
+}

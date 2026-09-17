@@ -546,6 +546,37 @@ write_env_value() {
 # Reads a line from stdin, echoing <default> if blank.
 # If validator_fn is given, re-prompts until validation passes (or stdin closes).
 # Echoes the accepted value on stdout. Prompt goes to stderr so stdout stays clean.
+# prompt_optional <label> [default] [validator]
+# Like prompt_with_default, but an empty answer is a valid answer meaning
+# "none". Use it where blank is a real choice rather than a missing one — the
+# VPN provider, where blank selects a usenet-only stack. prompt_with_default
+# rejects empty input unconditionally, which made that choice unreachable.
+prompt_optional() {
+  local label="$1" default="${2:-}" validator="${3:-}"
+  local input
+  while true; do
+    if [[ -n "$default" ]]; then
+      printf "  %s [%s%s%s]: " "$label" "$COLOR_DIM" "$default" "$COLOR_RESET" >&2
+    else
+      printf "  %s: " "$label" >&2
+    fi
+    IFS= read -r input || return 1
+    input="${input:-$default}"
+    if [[ -z "$input" ]]; then
+      echo ""
+      return 0
+    fi
+    if [[ -n "$validator" ]]; then
+      if ! "$validator" "$input" 2>/dev/null; then
+        log_warn "invalid — try again"
+        continue
+      fi
+    fi
+    echo "$input"
+    return 0
+  done
+}
+
 prompt_with_default() {
   local label="$1" default="${2:-}" validator="${3:-}"
   local input
