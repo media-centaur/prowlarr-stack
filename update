@@ -252,7 +252,7 @@ release_mode_update() {
   if [[ $DRY_RUN -eq 0 ]]; then
     log_phase "verifying (gluetun health + isolation)"
     local ok=1
-    if ! wait_for_gluetun_healthy 60; then ok=0; fi
+    if ! wait_for_tunnel_if_configured 60; then ok=0; fi
     if [[ $ok -eq 1 ]] && ! ./check; then ok=0; fi
     if [[ $ok -eq 0 ]]; then
       if [[ $NO_ROLLBACK -eq 1 ]]; then die "verification failed (--no-rollback: leaving broken state)"; fi
@@ -283,8 +283,8 @@ dev_mode_update() {
 
     if [[ $DRY_RUN -eq 0 ]]; then
       log_phase "waiting for gluetun tunnel (up to 60s)"
-      if wait_for_gluetun_healthy 60; then
-        log_ok "gluetun" "healthy"
+      if wait_for_tunnel_if_configured 60; then
+        log_ok "tunnel" "ready"
       else
         die "gluetun did not reach healthy post-restart — check: docker logs gluetun"
       fi

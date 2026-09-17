@@ -9,6 +9,19 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [1.3.1] - 2026-09-17
+
+### Fixed
+- **`./update` rolled itself back on a usenet-only install.** It waited for the
+  VPN tunnel to come up before verifying, even with no VPN configured — where
+  there is no tunnel to wait for — so every upgrade failed verification and
+  reverted. Found by taking the v1.3.0 upgrade.
+
+### Changed
+- `./scripts/release-checks` now lints `scripts/tag-vpn-indexers`,
+  `migrations/0004-per-indexer-egress` and `tests/lib/assert`, which its
+  explicit file list had been missing.
+
 ## [1.3.0] - 2026-09-17
 
 ### Added

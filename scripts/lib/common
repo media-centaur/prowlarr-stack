@@ -755,6 +755,19 @@ vpn_profile_active() {
   [[ "$(read_env_value .env COMPOSE_PROFILES 2>/dev/null)" == *vpn* ]]
 }
 
+# wait_for_tunnel_if_configured [timeout_seconds]
+# Waits for gluetun only when a VPN is configured. With no VPN the container is
+# absent from the compose project by design, so waiting on its health would fail
+# an otherwise healthy stack — and in ./update that means a spurious rollback.
+wait_for_tunnel_if_configured() {
+  local timeout="${1:-60}"
+  if ! vpn_profile_active; then
+    log_info "no VPN configured — not waiting for a tunnel"
+    return 0
+  fi
+  wait_for_gluetun_healthy "$timeout"
+}
+
 # gluetun_health_status — the container's health, or "missing" if absent.
 gluetun_health_status() {
   docker inspect --format '{{.State.Health.Status}}' gluetun 2>/dev/null || echo "missing"

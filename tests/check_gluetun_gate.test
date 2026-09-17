@@ -35,3 +35,25 @@ test_tunnel_gate_is_skipped_without_the_vpn_profile() {
   _with_health missing
   assert_tunnel_healthy >/dev/null 2>&1
 }
+
+# --- wait_for_tunnel_if_configured ---
+# Regression: ./update waited for gluetun unconditionally, so a usenet-only
+# install failed verification after every upgrade and rolled itself back.
+
+test_tunnel_wait_is_skipped_without_the_vpn_profile() {
+  vpn_profile_active() { return 1; }
+  wait_for_gluetun_healthy() { return 1; }   # would fail the wait if consulted
+  wait_for_tunnel_if_configured 1
+}
+
+test_tunnel_wait_fails_when_the_tunnel_never_comes_up() {
+  vpn_profile_active() { return 0; }
+  wait_for_gluetun_healthy() { return 1; }
+  refute wait_for_tunnel_if_configured 1
+}
+
+test_tunnel_wait_succeeds_when_the_tunnel_is_healthy() {
+  vpn_profile_active() { return 0; }
+  wait_for_gluetun_healthy() { return 0; }
+  wait_for_tunnel_if_configured 1
+}
