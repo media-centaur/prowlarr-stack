@@ -15,14 +15,8 @@ source scripts/lib/common
 
 SERVICE_TIMEOUT="${SERVICE_TIMEOUT:-120}"
 
-# Quick sanity: gluetun health.
-log_phase "gluetun health"
-status=$(docker inspect --format '{{.State.Health.Status}}' gluetun 2>/dev/null || echo "missing")
-case "$status" in
-  healthy) log_ok "gluetun" "$status" ;;
-  missing) die "gluetun container is not running — start the stack first" ;;
-  *) log_fail "gluetun" "$status"; die "gluetun is not healthy — check: docker logs gluetun" ;;
-esac
+# Quick sanity: gluetun health (skipped entirely on a usenet-only install).
+assert_tunnel_healthy || die "gluetun is not healthy — check: docker logs gluetun"
 
 failed=0
 verify_services "$SERVICE_TIMEOUT" || failed=1

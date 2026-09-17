@@ -708,6 +708,27 @@ vpn_profile_active() {
   [[ "$(read_env_value "$f" COMPOSE_PROFILES 2>/dev/null)" == *vpn* ]]
 }
 
+# gluetun_health_status — the container's health, or "missing" if absent.
+gluetun_health_status() {
+  docker inspect --format '{{.State.Health.Status}}' gluetun 2>/dev/null || echo "missing"
+}
+
+# assert_tunnel_healthy — fatal gate, but only when a VPN is configured.
+# With no VPN the gluetun container is absent by design, not broken.
+assert_tunnel_healthy() {
+  if ! vpn_profile_active; then
+    log_info "no VPN configured — skipping tunnel checks"
+    return 0
+  fi
+  log_phase "gluetun health"
+  local status; status=$(gluetun_health_status)
+  case "$status" in
+    healthy) log_ok "gluetun" "$status"; return 0 ;;
+    missing) log_fail "gluetun" "container is not running — start the stack first"; return 1 ;;
+    *) log_fail "gluetun" "$status — check: docker logs gluetun"; return 1 ;;
+  esac
+}
+
 # verify_services [timeout_seconds]
 # Asserts every application service actually answers, not just that the tunnel
 # is up. verify_isolation covers prowlarr and qBittorrent only (via their
