@@ -6,21 +6,40 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+### Changed
+### Fixed
+
+## [1.3.0] - 2026-09-17
+
+### Added
 - **`--settings-only` on `./backup` and `./restore`.** Carries just the settings
   you supplied — storage paths, usenet account, indexers, SABnzbd categories — so
   you can reinstall from scratch without re-entering them. Everything the stack
   generates is left out and rebuilt on the new install, including your WireGuard
   key, which a settings bundle never contains.
+
 ### Changed
 - **A VPN is now optional, and only torrent traffic uses it.** Prowlarr used to
   run inside the tunnel's network namespace, so every indexer depended on the
   VPN — including usenet indexers, which never needed one. Prowlarr now runs
   directly and torrent indexers reach the tunnel through a tagged proxy. Leave
   the VPN provider blank at setup for a usenet-only stack.
+- Torrent indexers are tagged `vpn` automatically at setup, and `./check` fails
+  when an enabled one is missing the tag — so a torrent indexer added later
+  cannot quietly leak to your ISP.
+- Prowlarr reaches the download clients by compose service name instead of your
+  LAN IP.
 
 ### Fixed
+- **A dead VPN stopped the stack from starting at all.** Prowlarr and byparr
+  waited on gluetun being healthy, and gluetun's healthcheck runs through the
+  tunnel — so once a tunnel stopped working, `docker compose up` failed and
+  Prowlarr never came back. A stack that was still running survived only until
+  its next restart.
 - **A lapsed or broken VPN no longer takes every indexer offline.** Usenet search
   keeps working; only torrent indexers stop.
+- Tunneled qBittorrent was wired into Prowlarr as `127.0.0.1`, which stopped
+  being correct once Prowlarr left the tunnel's network namespace.
 
 ## [1.2.1] - 2026-09-06
 
