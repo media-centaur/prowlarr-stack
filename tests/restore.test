@@ -89,7 +89,7 @@ EOF
 test_restore_rejects_missing_backup_file() {
   local tmp; tmp=$(mktemp -d)
   _make_fake_install "$tmp/install"
-  ! ( cd "$tmp/install" && ./restore /nonexistent/backup.tar.gz --yes 2>/dev/null )
+  if ( cd "$tmp/install" && ./restore /nonexistent/backup.tar.gz --yes 2>/dev/null ); then return 1; fi
   rm -rf "$tmp"
 }
 
@@ -102,7 +102,7 @@ test_restore_rejects_tarball_with_absolute_paths() {
   mkdir -p "$stage/config"
   # Force absolute member names by transforming the prefix.
   tar -czf "$tmp/evil.tar.gz" --transform 's|^|/abs/|' -C "$stage" .env config BACKUP-MANIFEST
-  ! ( cd "$tmp/install" && ./restore "$tmp/evil.tar.gz" --yes 2>/dev/null )
+  if ( cd "$tmp/install" && ./restore "$tmp/evil.tar.gz" --yes 2>/dev/null ); then return 1; fi
   rm -rf "$tmp" "$stage"
 }
 
@@ -114,7 +114,7 @@ test_restore_rejects_tarball_with_parent_refs() {
   echo "schema: 1" > "$stage/BACKUP-MANIFEST"
   mkdir -p "$stage/config"
   tar -czf "$tmp/evil.tar.gz" --transform 's|^|../escape/|' -C "$stage" .env config BACKUP-MANIFEST
-  ! ( cd "$tmp/install" && ./restore "$tmp/evil.tar.gz" --yes 2>/dev/null )
+  if ( cd "$tmp/install" && ./restore "$tmp/evil.tar.gz" --yes 2>/dev/null ); then return 1; fi
   rm -rf "$tmp" "$stage"
 }
 
@@ -127,7 +127,7 @@ test_restore_rejects_tarball_with_unexpected_entry() {
   mkdir -p "$stage/config"
   echo "drive-by" > "$stage/random.txt"
   tar -czf "$tmp/evil.tar.gz" -C "$stage" .env config BACKUP-MANIFEST random.txt
-  ! ( cd "$tmp/install" && ./restore "$tmp/evil.tar.gz" --yes 2>/dev/null )
+  if ( cd "$tmp/install" && ./restore "$tmp/evil.tar.gz" --yes 2>/dev/null ); then return 1; fi
   rm -rf "$tmp" "$stage"
 }
 
@@ -138,7 +138,7 @@ test_restore_rejects_tarball_missing_backup_manifest() {
   echo "x" > "$stage/.env"
   mkdir -p "$stage/config"
   tar -czf "$tmp/no-manifest.tar.gz" -C "$stage" .env config
-  ! ( cd "$tmp/install" && ./restore "$tmp/no-manifest.tar.gz" --yes 2>/dev/null )
+  if ( cd "$tmp/install" && ./restore "$tmp/no-manifest.tar.gz" --yes 2>/dev/null ); then return 1; fi
   rm -rf "$tmp" "$stage"
 }
 
@@ -146,7 +146,7 @@ test_restore_rejects_unknown_schema() {
   local tmp; tmp=$(mktemp -d)
   _make_fake_install "$tmp/install"
   _make_happy_backup "$tmp/backup.tar.gz" 99
-  ! ( cd "$tmp/install" && ./restore "$tmp/backup.tar.gz" --yes 2>/dev/null )
+  if ( cd "$tmp/install" && ./restore "$tmp/backup.tar.gz" --yes 2>/dev/null ); then return 1; fi
   rm -rf "$tmp"
 }
 
@@ -207,7 +207,7 @@ test_restore_no_rollback_snapshot_removes_them() {
   _make_fake_install "$tmp/install"
   _make_happy_backup "$tmp/backup.tar.gz"
   ( cd "$tmp/install" && ./restore "$tmp/backup.tar.gz" --yes --no-rollback-snapshot >/dev/null 2>&1 )
-  ! ls "$tmp/install"/.env.pre-restore-* >/dev/null 2>&1
-  ! ls -d "$tmp/install"/config.pre-restore-*/ >/dev/null 2>&1
+  refute ls "$tmp/install"/.env.pre-restore-* >/dev/null 2>&1
+  refute ls -d "$tmp/install"/config.pre-restore-*/ >/dev/null 2>&1
   rm -rf "$tmp"
 }

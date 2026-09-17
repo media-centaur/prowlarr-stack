@@ -79,7 +79,7 @@ test_backup_refuses_to_overwrite_existing_output() {
   _make_fake_install "$tmp/install"
   local out="$tmp/out.tar.gz"
   : > "$out"
-  ! ( cd "$tmp/install" && ./backup --no-stop --yes --output "$out" 2>/dev/null )
+  if ( cd "$tmp/install" && ./backup --no-stop --yes --output "$out" 2>/dev/null ); then return 1; fi
   rm -rf "$tmp"
 }
 
@@ -88,7 +88,7 @@ test_backup_refuses_to_write_into_git_repo() {
   _make_fake_install "$tmp/install"
   local repo="$tmp/protected"
   mkdir -p "$repo/.git"
-  ! ( cd "$tmp/install" && ./backup --no-stop --yes --output "$repo/leak.tar.gz" 2>/dev/null )
+  if ( cd "$tmp/install" && ./backup --no-stop --yes --output "$repo/leak.tar.gz" 2>/dev/null ); then return 1; fi
   rm -rf "$tmp"
 }
 
@@ -97,7 +97,7 @@ test_backup_refuses_to_write_into_jj_repo() {
   _make_fake_install "$tmp/install"
   local repo="$tmp/protected"
   mkdir -p "$repo/.jj"
-  ! ( cd "$tmp/install" && ./backup --no-stop --yes --output "$repo/leak.tar.gz" 2>/dev/null )
+  if ( cd "$tmp/install" && ./backup --no-stop --yes --output "$repo/leak.tar.gz" 2>/dev/null ); then return 1; fi
   rm -rf "$tmp"
 }
 
@@ -105,6 +105,6 @@ test_backup_fails_when_env_missing() {
   local tmp; tmp=$(mktemp -d)
   _make_fake_install "$tmp/install"
   rm "$tmp/install/.env"
-  ! ( cd "$tmp/install" && ./backup --no-stop --yes --output "$tmp/out.tar.gz" 2>/dev/null )
+  if ( cd "$tmp/install" && ./backup --no-stop --yes --output "$tmp/out.tar.gz" 2>/dev/null ); then return 1; fi
   rm -rf "$tmp"
 }

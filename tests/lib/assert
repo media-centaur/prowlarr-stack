@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Assertion helpers for the tests/*.test suite.
+#
+# Why these exist: bash exempts `!`-inverted commands from `set -e`, so a bare
+# `! cmd` assertion never aborts its test function — it only "works" as the
+# final statement, where its value becomes the return value. Add one line below
+# it and the assertion silently stops asserting. These helpers are not
+# `!`-inverted, so set -e applies to them normally, anywhere in a function.
+
+# refute <command...> — fail if the command SUCCEEDS.
+refute() {
+  if "$@"; then return 1; fi
+  return 0
+}
+
+# refute_grep <pattern> <file> — fail if the pattern IS present.
+refute_grep() {
+  if grep -q "$1" "$2"; then return 1; fi
+  return 0
+}

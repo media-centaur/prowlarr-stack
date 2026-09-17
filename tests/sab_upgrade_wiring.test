@@ -22,7 +22,7 @@ test_patch_on_preusenet_db_fails_without_migration() {
   # Baseline: proves the guard is meaningful — patching a row-less DB DOES die.
   local root; root=$(_make_root)
   local db="$root/config/prowlarr/prowlarr.db"
-  ! printf 'k' | "$PATCH" "$db" 192.168.1.10 8085 - 2>/dev/null
+  if printf 'k' | "$PATCH" "$db" 192.168.1.10 8085 - 2>/dev/null; then return 1; fi
   rm -rf "$root"
 }
 

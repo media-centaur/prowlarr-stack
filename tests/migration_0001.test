@@ -52,7 +52,7 @@ test_mixed_keeps_valid_drops_orphan() {
   local root; root=$(_make_db "2:keep" "[1,2]")   # 2 valid, 1 orphan
   "$MIGRATION" "$root"
   _has_tag "$root" 2
-  ! _has_tag "$root" 1
+  refute _has_tag "$root" 1
   [[ "$(_tag_count "$root")" -eq 1 ]]
   rm -rf "$root"
 }

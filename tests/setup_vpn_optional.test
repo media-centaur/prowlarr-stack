@@ -19,7 +19,7 @@ test_compose_profiles_absent_when_no_vpn() {
 
 test_qbt_vpn_requires_vpn_credentials() {
   # setup must refuse QBITTORRENT_USE_VPN=1 with no provider configured.
-  ! validate_vpn_combination "" 1 >/dev/null 2>&1
+  refute validate_vpn_combination "" 1 >/dev/null 2>&1
 }
 
 test_qbt_vpn_allowed_with_a_provider() {

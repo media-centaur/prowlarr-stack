@@ -58,8 +58,8 @@ test_fails_loud_and_does_not_advance_state() {
 exit 1
 EOF
   chmod +x "$root/migrations/0001-boom"
-  ! "$RUNNER" "$root" 2>/dev/null
-  ! grep -qxF "0001-boom" "$root/config/.migrations" 2>/dev/null
+  refute "$RUNNER" "$root" 2>/dev/null
+  refute grep -qxF "0001-boom" "$root/config/.migrations" 2>/dev/null
   rm -rf "$root"
 }
 

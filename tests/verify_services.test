@@ -47,14 +47,14 @@ test_wait_for_http_succeeds_when_marker_present() {
 
 test_wait_for_http_fails_when_service_unreachable() {
   RESPONSES=()
-  ! wait_for_http gluetun "http://127.0.0.1:9696/ping" "OK" 2
+  refute wait_for_http gluetun "http://127.0.0.1:9696/ping" "OK" 2
 }
 
 test_wait_for_http_fails_when_marker_absent() {
   # Service answers, but with the wrong body — a 200 from the wrong process
   # must not count as healthy.
   RESPONSES=(["9696/ping"]='<html>404 not found</html>')
-  ! wait_for_http gluetun "http://127.0.0.1:9696/ping" "OK" 2
+  refute wait_for_http gluetun "http://127.0.0.1:9696/ping" "OK" 2
 }
 
 # --- verify_services ---
@@ -67,7 +67,7 @@ test_verify_services_passes_when_all_three_respond() {
 test_verify_services_fails_when_prowlarr_down() {
   _all_healthy
   unset 'RESPONSES[9696/ping]'
-  ! verify_services 2 >/dev/null 2>&1
+  refute verify_services 2 >/dev/null 2>&1
 }
 
 test_verify_services_fails_when_byparr_down() {
@@ -77,13 +77,13 @@ test_verify_services_fails_when_byparr_down() {
   _all_healthy
   unset 'RESPONSES[8191/health]'
   vpn_profile_active() { return 0; }
-  ! verify_services 2 >/dev/null 2>&1
+  refute verify_services 2 >/dev/null 2>&1
 }
 
 test_verify_services_fails_when_sabnzbd_down() {
   _all_healthy
   unset 'RESPONSES[mode=version]'
-  ! verify_services 2 >/dev/null 2>&1
+  refute verify_services 2 >/dev/null 2>&1
 }
 
 test_verify_services_reports_every_failure_not_just_the_first() {
@@ -130,7 +130,7 @@ test_byparr_is_probed_under_the_vpn_profile() {
   _all_healthy
   unset 'RESPONSES[8191/health]'
   vpn_profile_active() { return 0; }
-  ! verify_services 2 >/dev/null 2>&1
+  refute verify_services 2 >/dev/null 2>&1
 }
 
 test_verify_services_tolerates_sabnzbd_without_usenet_credentials() {
@@ -151,7 +151,7 @@ test_wait_for_http_respects_its_wall_clock_budget() {
   http_probe_in_container() { sleep 2; return 1; }
   local start elapsed
   start=$(date +%s)
-  ! wait_for_http gluetun "http://127.0.0.1:9696/ping" "OK" 6
+  refute wait_for_http gluetun "http://127.0.0.1:9696/ping" "OK" 6
   elapsed=$(( $(date +%s) - start ))
   # Allow one in-flight probe to finish past the deadline, but nothing like the
   # old ~3x overrun.

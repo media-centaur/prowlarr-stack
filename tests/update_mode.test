@@ -26,5 +26,5 @@ test_version_compare_handles_leading_v() {
 }
 
 test_version_compare_rejects_bad_format() {
-  ! version_compare "not-a-version" "v1.0.0" eq 2>/dev/null
+  refute version_compare "not-a-version" "v1.0.0" eq 2>/dev/null
 }

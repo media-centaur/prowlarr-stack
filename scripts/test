@@ -12,7 +12,7 @@ for file in tests/*.test; do
   # Each test file defines test_* functions and registers itself via a convention.
   # The runner sources the file in a subshell per test function so state can't leak.
   while IFS= read -r fn; do
-    output=$(bash -c "set -e; source '$file'; $fn" 2>&1)
+    output=$(bash -c "set -e; source 'tests/lib/assert'; source '$file'; $fn" 2>&1)
     status=$?
     if [[ $status -eq 0 ]]; then
       pass=$((pass + 1))

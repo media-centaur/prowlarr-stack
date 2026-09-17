@@ -36,10 +36,10 @@ test_is_idempotent() {
   rm -f "$db"
 }
 
-test_refuses_missing_db() { ! "$SCRIPT" /nonexistent/x.db "192.168.1.10" "8085" 2>/dev/null; }
+test_refuses_missing_db() { refute "$SCRIPT" /nonexistent/x.db "192.168.1.10" "8085" 2>/dev/null; }
 
 test_validates_host() {
   local db; db=$(_make_db)
-  ! "$SCRIPT" "$db" "not-an-ip" "8085" 2>/dev/null
+  refute "$SCRIPT" "$db" "not-an-ip" "8085" 2>/dev/null
   rm -f "$db"
 }

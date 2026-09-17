@@ -13,6 +13,8 @@ test_publishes_8085() {
 
 test_not_in_gluetun_netns() {
   # sabnzbd must NOT share gluetun's network namespace (it runs direct).
-  ! docker compose -f "$COMPOSE" config 2>/dev/null \
-    | awk '/^  sabnzbd:/{f=1} f&&/network_mode:.*gluetun/{print; exit}' | grep -q gluetun
+  if docker compose -f "$COMPOSE" config 2>/dev/null \
+    | awk '/^  sabnzbd:/{f=1} f&&/network_mode:.*gluetun/{print; exit}' | grep -q gluetun; then
+    return 1
+  fi
 }

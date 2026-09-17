@@ -20,13 +20,13 @@ test_tunnel_gate_passes_when_gluetun_healthy() {
 test_tunnel_gate_fails_when_gluetun_unhealthy() {
   vpn_profile_active() { return 0; }
   _with_health unhealthy
-  ! assert_tunnel_healthy >/dev/null 2>&1
+  refute assert_tunnel_healthy >/dev/null 2>&1
 }
 
 test_tunnel_gate_fails_when_gluetun_missing() {
   vpn_profile_active() { return 0; }
   _with_health missing
-  ! assert_tunnel_healthy >/dev/null 2>&1
+  refute assert_tunnel_healthy >/dev/null 2>&1
 }
 
 test_tunnel_gate_is_skipped_without_the_vpn_profile() {

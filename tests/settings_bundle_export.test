@@ -74,13 +74,13 @@ test_export_excludes_secrets_and_generated_values() {
   # The test that stops a future change quietly widening the bundle.
   local inst; inst=$(_make_install)
   local b; b=$(_export "$inst")
-  ! grep -q 'WIREGUARD_PRIVATE_KEY' "$b/env.subset"
-  ! grep -q 'VPN_SERVICE_PROVIDER' "$b/env.subset"
-  ! grep -q 'HOST_LAN_IP' "$b/env.subset"
-  ! grep -q 'LAN_SUBNET' "$b/env.subset"
-  ! grep -q 'SABNZBD_API_KEY' "$b/env.subset"
-  ! grep -q 'QBITTORRENT_PASSWORD' "$b/env.subset"
-  ! grep -q 'COMPOSE_PROFILES' "$b/env.subset"
+  refute_grep 'WIREGUARD_PRIVATE_KEY' "$b/env.subset"
+  refute_grep 'VPN_SERVICE_PROVIDER' "$b/env.subset"
+  refute_grep 'HOST_LAN_IP' "$b/env.subset"
+  refute_grep 'LAN_SUBNET' "$b/env.subset"
+  refute_grep 'SABNZBD_API_KEY' "$b/env.subset"
+  refute_grep 'QBITTORRENT_PASSWORD' "$b/env.subset"
+  refute_grep 'COMPOSE_PROFILES' "$b/env.subset"
   rm -rf "$inst" "$b"
 }
 
@@ -107,15 +107,15 @@ test_export_sab_subset_keeps_categories_drops_api_key_and_server() {
   grep -q '^\[categories\]' "$b/sabnzbd.subset.ini"
   grep -q '^\[\[movies\]\]' "$b/sabnzbd.subset.ini"
   grep -q 'pre_check' "$b/sabnzbd.subset.ini"
-  ! grep -q 'api_key' "$b/sabnzbd.subset.ini"
-  ! grep -q 'server1' "$b/sabnzbd.subset.ini"
-  ! grep -q 'somepass' "$b/sabnzbd.subset.ini"
+  refute_grep 'api_key' "$b/sabnzbd.subset.ini"
+  refute_grep 'server1' "$b/sabnzbd.subset.ini"
+  refute_grep 'somepass' "$b/sabnzbd.subset.ini"
   rm -rf "$inst" "$b"
 }
 
 test_export_refuses_an_install_without_env() {
   local root; root=$(mktemp -d)
   local out; out=$(mktemp -d)
-  ! scripts/settings-bundle export "$root" "$out" >/dev/null 2>&1
+  refute scripts/settings-bundle export "$root" "$out" >/dev/null 2>&1
   rm -rf "$root" "$out"
 }
