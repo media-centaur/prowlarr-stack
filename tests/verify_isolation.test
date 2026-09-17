@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -u
+source scripts/lib/common
+
+# Fake the API surface: $1 = JSON array as /api/v1/indexer would return it.
+_fake_indexers() { printf '%s' "$1" > "$FAKE_INDEXERS"; }
+
+setup_fake() {
+  FAKE_INDEXERS=$(mktemp)
+  export FAKE_INDEXERS
+  fetch_indexers() { cat "$FAKE_INDEXERS"; }
+}
+
+test_no_vpn_with_only_usenet_indexers_passes() {
+  setup_fake
+  _fake_indexers '[{"id":15,"name":"NZBgeek","protocol":"usenet","enable":true,"tags":[]}]'
+  assert_torrent_indexers_tagged "" ""
+}
+
+test_no_vpn_with_enabled_torrent_indexer_fails() {
+  setup_fake
+  _fake_indexers '[{"id":9,"name":"Sample Tracker","protocol":"torrent","enable":true,"tags":[]}]'
+  ! assert_torrent_indexers_tagged "" ""
+}
+
+test_vpn_with_untagged_torrent_indexer_fails() {
+  setup_fake
+  _fake_indexers '[{"id":9,"name":"Sample Tracker","protocol":"torrent","enable":true,"tags":[]}]'
+  ! assert_torrent_indexers_tagged "vpn" "3"
+}
+
+test_vpn_with_tagged_torrent_indexer_passes() {
+  setup_fake
+  _fake_indexers '[{"id":9,"name":"Sample Tracker","protocol":"torrent","enable":true,"tags":[3]}]'
+  assert_torrent_indexers_tagged "vpn" "3"
+}
+
+test_disabled_torrent_indexer_is_ignored() {
+  setup_fake
+  _fake_indexers '[{"id":9,"name":"Sample Tracker","protocol":"torrent","enable":false,"tags":[]}]'
+  assert_torrent_indexers_tagged "" ""
+}

@@ -610,48 +610,43 @@ fetch_container_external_ip() {
 }
 
 # verify_isolation
-# Reads QBITTORRENT_USE_VPN from .env to know which topology to assert:
-#   - direct mode (default): prowlarr and qBT MUST have different external IPs
-#     (same IP → prowlarr is leaking past the VPN).
-#   - VPN mode: prowlarr and qBT MUST have the SAME external IP (different IPs
-#     → qBT escaped the tunnel somehow).
-# Returns 0 if the topology check passes, 1 if it fails or either fetch errors.
+# Asserts that torrent traffic is tunneled, per indexer.
+# Prowlarr runs on the bridge, so its own exit IP is always the ISP — comparing
+# it against qBittorrent's says nothing. What matters instead is that every
+# enabled torrent-protocol indexer carries the `vpn` tag that binds it to
+# Prowlarr's indexer proxy. Usenet indexers never needed the tunnel and are
+# left alone.
+# Returns 0 if the assertions hold, 1 on any failure or unreachable probe.
 verify_isolation() {
-  local prowlarr_ip qbt_ip qbt_uses_vpn
   log_phase "verification"
 
-  qbt_uses_vpn=$(read_env_value .env QBITTORRENT_USE_VPN 2>/dev/null)
-  [[ -z "$qbt_uses_vpn" ]] && qbt_uses_vpn=0
+  if ! vpn_profile_active; then
+    assert_torrent_indexers_tagged "" "" || return 1
+    return 0
+  fi
 
-  if ! prowlarr_ip=$(fetch_container_external_ip prowlarr); then
-    log_fail "prowlarr external IP" "unreachable — gluetun tunnel down?"
-    log_info "check: docker logs gluetun"
+  local tagid json
+  json=$(fetch_prowlarr_tags) || { log_fail "tags" "could not read Prowlarr tags"; return 1; }
+  tagid=$(jexpr "$json" "(SELECT json_extract(value,'\$.id') FROM json_each(j) WHERE json_extract(value,'\$.label')='vpn' LIMIT 1)")
+  [[ -n "$tagid" ]] || { log_fail "tags" "no 'vpn' tag in Prowlarr — run scripts/tag-vpn-indexers"; return 1; }
+
+  assert_torrent_indexers_tagged "vpn" "$tagid" || return 1
+
+  local tunnel_ip direct_ip
+  tunnel_ip=$(fetch_container_external_ip gluetun) || { log_fail "tunnel exit IP" "unreachable"; return 1; }
+  direct_ip=$(fetch_container_external_ip prowlarr) || { log_fail "direct exit IP" "unreachable"; return 1; }
+  log_ok "tunnel exit IP" "$tunnel_ip"
+  log_ok "direct exit IP" "$direct_ip"
+  if [[ "$tunnel_ip" == "$direct_ip" ]]; then
+    log_fail "isolation" "FAIL — tunnel and direct exit IPs match; the tunnel is not isolating"
+    docker logs --tail 20 gluetun 2>&1 | sed 's/^/      /' >&2
     return 1
   fi
-  log_ok "prowlarr external IP" "$prowlarr_ip"
 
-  if ! qbt_ip=$(fetch_container_external_ip qbittorrent); then
-    log_fail "qbittorrent external IP" "unreachable — container not running?"
-    return 1
-  fi
-  log_ok "qbittorrent external IP" "$qbt_ip"
-
-  if [[ "$qbt_uses_vpn" == "1" ]]; then
-    if [[ "$prowlarr_ip" != "$qbt_ip" ]]; then
-      log_fail "isolation" "FAIL — VPN mode active but qBT IP differs from prowlarr; qBT is not in the tunnel"
-      log_info "last 20 lines of gluetun log:"
-      docker logs --tail 20 gluetun 2>&1 | sed 's/^/      /' >&2
-      return 1
-    fi
-    log_ok "isolation" "VPN mode: both via gluetun ($prowlarr_ip)"
-  else
-    if [[ "$prowlarr_ip" == "$qbt_ip" ]]; then
-      log_fail "isolation" "FAIL — same IP on both; tunnel not isolating traffic"
-      log_info "last 20 lines of gluetun log:"
-      docker logs --tail 20 gluetun 2>&1 | sed 's/^/      /' >&2
-      return 1
-    fi
-    log_ok "isolation" "direct mode: prowlarr via VPN ($prowlarr_ip), qBT direct ($qbt_ip)"
+  if [[ "$(read_env_value .env QBITTORRENT_USE_VPN 2>/dev/null)" == "1" ]]; then
+    local qbt_ip; qbt_ip=$(fetch_container_external_ip qbittorrent) || { log_fail "qbittorrent exit IP" "unreachable"; return 1; }
+    [[ "$qbt_ip" == "$tunnel_ip" ]] || { log_fail "isolation" "qBT tunneled but its IP ($qbt_ip) differs from the tunnel ($tunnel_ip)"; return 1; }
+    log_ok "isolation" "qBittorrent tunneled ($qbt_ip)"
   fi
   return 0
 }
@@ -731,9 +726,9 @@ assert_tunnel_healthy() {
 
 # verify_services [timeout_seconds]
 # Asserts every application service actually answers, not just that the tunnel
-# is up. verify_isolation covers prowlarr and qBittorrent only (via their
-# external IPs), which left byparr and SABnzbd unverified — an image bump that
-# broke either one passed the upgrade gate and was never rolled back.
+# is up. verify_isolation asserts egress routing only, which left byparr and
+# SABnzbd unverified — an image bump that broke either one passed the upgrade
+# gate and was never rolled back.
 # Returns 0 only if all three probes succeed. byparr is only probed under the
 # vpn profile — without it, gluetun/byparr are absent from the compose project
 # by design, so a non-answering solver there is not a failure.
@@ -1013,5 +1008,74 @@ validate_vpn_combination() {
     log_fail "config" "QBITTORRENT_USE_VPN=1 requires a VPN provider"
     return 1
   fi
+  return 0
+}
+
+# --- Prowlarr indexer / tag assertions ---
+
+# jexpr <json-string> <expr using j>
+# Evaluate a scalar SQLite JSON expression (variable `j` = the JSON) over a string.
+jexpr() {
+  local jf; jf=$(mktemp)
+  printf '%s' "$1" > "$jf"
+  sqlite3 :memory: "SELECT $2 FROM (SELECT readfile('$jf') AS j);"
+  rm -f "$jf"
+}
+
+# fetch_indexers — Prowlarr's indexer list as JSON. Overridable in tests.
+# The indexer's protocol is only available here: Prowlarr's database has no
+# protocol column, and Implementation (Newznab/Torznab/Cardigann) does not
+# determine it — a Cardigann indexer is definition-driven and can be either.
+fetch_indexers() {
+  local key; key=$(fetch_prowlarr_api_key) || return 1
+  curl -fsS --max-time 30 -H "X-Api-Key: $key" "http://127.0.0.1:9696/api/v1/indexer"
+}
+
+# fetch_prowlarr_tags — Prowlarr's tag list as JSON. Overridable in tests.
+fetch_prowlarr_tags() {
+  local key; key=$(fetch_prowlarr_api_key) || return 1
+  curl -fsS --max-time 30 -H "X-Api-Key: $key" "http://127.0.0.1:9696/api/v1/tag"
+}
+
+# assert_torrent_indexers_tagged <profile> <vpn_tag_id>
+# VPN egress is a property of each indexer, not of the stack: Prowlarr runs on
+# the bridge and only indexers carrying the vpn tag are routed through the
+# tunnel by its indexer proxy.
+# With no VPN (<profile> empty): no enabled torrent indexer may exist — it could
+# not reach an ISP-blocked site, and would leak if it could.
+# With a VPN: every enabled torrent indexer must carry the vpn tag.
+#
+# The tag test aliases the outer json_each as `o`. Without the alias, the inner
+# json_each's own `value` column shadows the outer row, so json_extract(value,
+# '$.tags') reads the wrong `value` and every indexer looks untagged.
+assert_torrent_indexers_tagged() {
+  local profile="$1" tagid="$2" json bad
+  json=$(fetch_indexers) || { log_fail "indexers" "could not read Prowlarr's indexer list"; return 1; }
+
+  if [[ -z "$profile" ]]; then
+    bad=$(jexpr "$json" "(SELECT group_concat(json_extract(o.value,'\$.name'),', ')
+      FROM json_each(j) o
+      WHERE json_extract(o.value,'\$.protocol')='torrent'
+        AND json_extract(o.value,'\$.enable') IN (1,'true'))")
+    if [[ -n "$bad" ]]; then
+      log_fail "indexers" "torrent indexers enabled with no VPN configured: $bad"
+      log_info "configure a VPN (./setup --reconfigure) or disable them in Prowlarr"
+      return 1
+    fi
+    log_ok "indexers" "usenet-only; no VPN needed"
+    return 0
+  fi
+
+  bad=$(jexpr "$json" "(SELECT group_concat(json_extract(o.value,'\$.name'),', ')
+    FROM json_each(j) o
+    WHERE json_extract(o.value,'\$.protocol')='torrent'
+      AND json_extract(o.value,'\$.enable') IN (1,'true')
+      AND NOT EXISTS (SELECT 1 FROM json_each(json_extract(o.value,'\$.tags')) t WHERE t.value=$tagid))")
+  if [[ -n "$bad" ]]; then
+    log_fail "indexers" "torrent indexers missing the vpn tag: $bad"
+    log_info "fix: scripts/tag-vpn-indexers"
+    return 1
+  fi
+  log_ok "indexers" "every enabled torrent indexer carries the vpn tag"
   return 0
 }

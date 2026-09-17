@@ -38,14 +38,6 @@ _get() { curl -fsS --max-time 30 -H "X-Api-Key: $KEY" "$BASE$1"; }
 _post() { curl -fsS --max-time 60 -X POST -H "X-Api-Key: $KEY" -H "Content-Type: application/json" -d "$2" "$BASE$1"; }
 _put()  { curl -fsS --max-time 60 -X PUT  -H "X-Api-Key: $KEY" -H "Content-Type: application/json" -d "$2" "$BASE$1"; }
 
-# Evaluate a scalar SQLite JSON expression (variable `j` = the JSON) over a string.
-jexpr() {  # jexpr <json-string> <expr using j>
-  local jf; jf=$(mktemp)
-  printf '%s' "$1" > "$jf"
-  sqlite3 :memory: "SELECT $2 FROM (SELECT readfile('$jf') AS j);"
-  rm -f "$jf"
-}
-
 # --- ensure the tag exists, resolve its id ---
 tagid=$(jexpr "$(_get /tag)" \
   "(SELECT json_extract(value,'\$.id') FROM json_each(j) WHERE json_extract(value,'\$.label')='$TAGNAME' LIMIT 1)")
