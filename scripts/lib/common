@@ -748,11 +748,11 @@ wait_for_http() {
   done
 }
 
-# vpn_profile_active [env_file]
+# vpn_profile_active
 # True when the vpn compose profile is active, i.e. gluetun/byparr exist.
+# Reads .env in the working directory; every caller runs from the install root.
 vpn_profile_active() {
-  local f="${1:-.env}"
-  [[ "$(read_env_value "$f" COMPOSE_PROFILES 2>/dev/null)" == *vpn* ]]
+  [[ "$(read_env_value .env COMPOSE_PROFILES 2>/dev/null)" == *vpn* ]]
 }
 
 # gluetun_health_status — the container's health, or "missing" if absent.
