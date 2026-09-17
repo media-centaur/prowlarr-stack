@@ -845,6 +845,108 @@ git commit -m "feat: resolve download clients over the compose bridge"
 
 ---
 
+## Task 7R: Download-client hosts over the bridge (RESTORED)
+
+The original Task 7 bundled a code change with live-install verification steps.
+The verification was superseded by the clean-install pass; **the code change was
+not**, and dropping it left a live regression.
+
+`setup:349-350` currently reads:
+
+```bash
+qbt_host="$lan_ip"
+[[ "$qbt_use_vpn" == "1" ]] && qbt_host="127.0.0.1"
+```
+
+`127.0.0.1` was correct only while Prowlarr shared gluetun's network namespace
+with a tunneled qBittorrent. Task 2 moved Prowlarr onto the bridge, so that
+address now resolves to Prowlarr itself: a VPN user with `QBITTORRENT_USE_VPN=1`
+gets a download client Prowlarr cannot reach. The `lan_ip` path still happens to
+work (the published port is reachable from the bridge), so only the tunneled
+case is broken — but it is broken now, by work already committed.
+
+**Files:**
+- Modify: `setup` (~349-351, ~439)
+- Modify: `scripts/patch-prowlarr-db`, `scripts/patch-prowlarr-sab` (host validation)
+- Modify: `scripts/lib/common` (new validator)
+- Test: `tests/patch_prowlarr_db.test`, `tests/patch_prowlarr_sab.test`
+
+- [ ] **Step 1: Write failing tests**
+
+Both patchers currently `die "host must be a valid IPv4 address"` on anything
+that is not an IPv4 address, so they reject container DNS names. Add to each
+patcher's test file:
+
+```bash
+test_accepts_a_container_dns_host() {
+  local d; d=$(mktemp -d); _seed_db "$d/prowlarr.db"
+  printf '%s' "pw" | "$SCRIPT" "$d/prowlarr.db" qbittorrent 8080 -
+  [[ "$(sqlite3 "$d/prowlarr.db" "SELECT json_extract(Settings,'\$.host') FROM DownloadClients LIMIT 1;")" == "qbittorrent" ]]
+  rm -rf "$d"
+}
+
+test_still_accepts_an_ipv4_host() {
+  local d; d=$(mktemp -d); _seed_db "$d/prowlarr.db"
+  printf '%s' "pw" | "$SCRIPT" "$d/prowlarr.db" 192.168.1.10 8080 -
+  [[ "$(sqlite3 "$d/prowlarr.db" "SELECT json_extract(Settings,'\$.host') FROM DownloadClients LIMIT 1;")" == "192.168.1.10" ]]
+  rm -rf "$d"
+}
+
+test_rejects_a_host_that_is_neither() {
+  local d; d=$(mktemp -d); _seed_db "$d/prowlarr.db"
+  refute sh -c "printf pw | '$SCRIPT' '$d/prowlarr.db' 'not a host!' 8080 -"
+  rm -rf "$d"
+}
+```
+
+Use each file's existing seeding idiom rather than inventing `_seed_db` if one
+already exists.
+
+- [ ] **Step 2: Add a host validator to `scripts/lib/common`**
+
+```bash
+# validate_host <value>
+# Accepts an IPv4 address or a DNS label (a compose service name such as
+# `qbittorrent`, or a dotted hostname). Prowlarr reaches the download clients
+# over the compose bridge now, so a bare service name is the normal case; an
+# IPv4 address remains valid for a client reached over the LAN.
+validate_host() {
+  local host="$1"
+  [[ -n "$host" ]] || return 1
+  validate_ipv4 "$host" 2>/dev/null && return 0
+  [[ "$host" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$ ]]
+}
+```
+
+- [ ] **Step 3: Use it in both patchers**
+
+In `scripts/patch-prowlarr-db:38` and `scripts/patch-prowlarr-sab:35`, replace
+the `validate_ipv4` guard with `validate_host`, and update the message to
+`host must be an IPv4 address or a hostname (got: $host)`.
+
+- [ ] **Step 4: Point setup at container DNS**
+
+Replace `setup:349-350` with:
+
+```bash
+# Prowlarr is on the compose bridge, so it reaches the clients by service name.
+# A tunneled qBittorrent shares gluetun's namespace and has no name of its own,
+# so it is addressed as gluetun.
+qbt_host="qbittorrent"
+[[ "$qbt_use_vpn" == "1" ]] && qbt_host="gluetun"
+```
+
+and at `setup:439` pass `sabnzbd` instead of `$lan_ip`.
+
+- [ ] **Step 5: Run the suite and commit**
+
+```bash
+git add setup scripts/patch-prowlarr-db scripts/patch-prowlarr-sab scripts/lib/common tests/
+git commit -m "fix: address download clients by service name over the bridge"
+```
+
+---
+
 # Phase 2 — The VPN path
 
 ## Task 8: Prove tag-scoped proxy routing with a stand-in proxy
