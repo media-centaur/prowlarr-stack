@@ -9,6 +9,26 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ### Changed
 ### Fixed
 
+## [1.3.2] - 2026-09-17
+
+### Fixed
+- **Every usenet grab failed with "Unable to connect to SABnzbd".** Since 1.3.0
+  Prowlarr addresses SABnzbd by compose service name, but `./setup` kept
+  writing the host-published port (8085) into Prowlarr's download-client row.
+  Inside its container SABnzbd listens on 8080, so the connection was refused.
+  Prowlarr now uses `sabnzbd:8080`.
+- **SABnzbd refused requests addressed as `sabnzbd`.** Its hostname whitelist
+  held only the container id it filled in on first start, so even at the right
+  port Prowlarr got "Hostname verification failed". `./setup` now adds
+  `sabnzbd` to the whitelist on every run, keeping any entries already there,
+  and fresh installs seed it.
+
+### Added
+- **`./check` runs Prowlarr's own connection test against each download
+  client.** Every container answered while every usenet grab failed, and the
+  upgrade gate let 1.3.0 through. A client Prowlarr cannot reach now fails
+  `./check`, so `./update` rolls such an upgrade back.
+
 ## [1.3.1] - 2026-09-17
 
 ### Fixed
