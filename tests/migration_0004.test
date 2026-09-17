@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -u
+
+MIGRATION="${MIGRATION:-migrations/0004-per-indexer-egress}"
+
+_make_root() {  # $1 = "vpn" to seed VPN credentials
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/config/prowlarr"
+  local db="$root/config/prowlarr/prowlarr.db"
+  sqlite3 "$db" 'CREATE TABLE Tags (Id INTEGER PRIMARY KEY AUTOINCREMENT, Label TEXT NOT NULL);'
+  sqlite3 "$db" 'CREATE TABLE IndexerProxies (Id INTEGER PRIMARY KEY AUTOINCREMENT, Name TEXT NOT NULL, Implementation TEXT NOT NULL, Settings TEXT NOT NULL, ConfigContract TEXT NOT NULL, Tags TEXT NOT NULL DEFAULT '"'"'[]'"'"');'
+  sqlite3 "$db" "INSERT INTO IndexerProxies (Name,Implementation,Settings,ConfigContract,Tags) VALUES ('FlareSolverr','FlareSolverr',json_object('host','http://localhost:8191/'),'FlareSolverrSettings','[]');"
+  if [[ "${1:-}" == "vpn" ]]; then
+    printf 'VPN_SERVICE_PROVIDER=nordvpn\n' > "$root/.env"
+  else
+    printf 'DOWNLOADS_DIR=/tmp/d\n' > "$root/.env"
+  fi
+  echo "$root"
+}
+_db() { echo "$1/config/prowlarr/prowlarr.db"; }
+
+test_writes_compose_profiles_when_vpn_configured() {
+  local root; root=$(_make_root vpn)
+  "$MIGRATION" "$root"
+  grep -q '^COMPOSE_PROFILES=vpn$' "$root/.env"
+  rm -rf "$root"
+}
+
+test_leaves_profile_empty_without_vpn() {
+  local root; root=$(_make_root)
+  "$MIGRATION" "$root"
+  refute grep -q '^COMPOSE_PROFILES=vpn$' "$root/.env"
+  rm -rf "$root"
+}
+
+test_repoints_flaresolverr_host() {
+  local root; root=$(_make_root vpn)
+  "$MIGRATION" "$root"
+  [[ "$(sqlite3 "$(_db "$root")" "SELECT json_extract(Settings,'\$.host') FROM IndexerProxies WHERE Implementation='FlareSolverr';")" == "http://gluetun:8191/" ]]
+  rm -rf "$root"
+}
+
+test_is_idempotent() {
+  local root; root=$(_make_root vpn)
+  "$MIGRATION" "$root"
+  "$MIGRATION" "$root"
+  [[ "$(sqlite3 "$(_db "$root")" "SELECT COUNT(*) FROM IndexerProxies WHERE Implementation='Http';")" -eq 1 ]]
+  [[ "$(sqlite3 "$(_db "$root")" "SELECT COUNT(*) FROM Tags WHERE Label='vpn';")" -eq 1 ]]
+  rm -rf "$root"
+}
+
+test_no_op_without_db() {
+  local root; root=$(mktemp -d); printf 'X=1\n' > "$root/.env"
+  "$MIGRATION" "$root"
+  rm -rf "$root"
+}

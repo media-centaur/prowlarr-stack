@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# 0004-per-indexer-egress — move an existing install from "Prowlarr lives inside
+# gluetun's network namespace" to per-indexer egress.
+#
+# Writes COMPOSE_PROFILES=vpn when VPN credentials exist (so gluetun and byparr
+# keep running), re-points the FlareSolverr proxy at gluetun:8191 now that
+# Prowlarr no longer shares its namespace, and seeds the vpn tag + Http proxy.
+# Indexer tagging is NOT done here — protocol is only available from the API, so
+# setup runs scripts/tag-vpn-indexers after the stack is up.
+#
+# The Http proxy row is keyed on Implementation='Http' AND Name='VPN', matching
+# scripts/patch-prowlarr-db, so a user's own unrelated Http-type proxy is never
+# adopted or overwritten.
+#
+# Idempotent; a no-op on already-correct state.
+#
+# Usage: 0004-per-indexer-egress <install_dir>
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=../scripts/lib/common
+source "$here/../scripts/lib/common"
+
+root="${1:?usage: 0004-per-indexer-egress <install_dir>}"
+db="$root/config/prowlarr/prowlarr.db"
+env_file="$root/.env"
+
+provider=$(read_env_value "$env_file" VPN_SERVICE_PROVIDER 2>/dev/null || true)
+if [[ -n "$provider" ]]; then
+  write_env_value "$env_file" COMPOSE_PROFILES "vpn"
+  log_ok "0004" "COMPOSE_PROFILES=vpn (VPN credentials present)"
+else
+  write_env_value "$env_file" COMPOSE_PROFILES ""
+  log_info "no VPN credentials — usenet-only stack"
+fi
+
+if [[ ! -f "$db" ]]; then
+  log_info "no prowlarr.db — skipping database changes"
+  exit 0
+fi
+
+sqlite3 "$db" "
+  UPDATE IndexerProxies
+     SET Settings = json_set(Settings,'\$.host','http://gluetun:8191/')
+   WHERE Implementation='FlareSolverr'
+     AND json_extract(Settings,'\$.host') LIKE '%localhost%';"
+
+if [[ -n "$provider" ]]; then
+  sqlite3 "$db" "INSERT INTO Tags (Label) SELECT 'vpn' WHERE NOT EXISTS (SELECT 1 FROM Tags WHERE Label='vpn');"
+  vpn_tag=$(sqlite3 "$db" "SELECT Id FROM Tags WHERE Label='vpn' ORDER BY Id LIMIT 1;")
+  sqlite3 "$db" "
+    INSERT INTO IndexerProxies (Name, Implementation, Settings, ConfigContract, Tags)
+    SELECT 'VPN','Http',json_object('host','gluetun','port',8888),'HttpSettings',json_array($vpn_tag)
+    WHERE NOT EXISTS (SELECT 1 FROM IndexerProxies WHERE Implementation='Http' AND Name='VPN');"
+  sqlite3 "$db" "
+    UPDATE IndexerProxies
+       SET Settings = json_set(Settings,'\$.host','gluetun','\$.port',8888),
+           Tags = json_array($vpn_tag)
+     WHERE Implementation='Http' AND Name='VPN';"
+  log_ok "0004" "vpn tag (id $vpn_tag) + Http proxy seeded — tag indexers with scripts/tag-vpn-indexers"
+fi
