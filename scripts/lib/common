@@ -1043,6 +1043,24 @@ jexpr() {
   rm -f "$jf"
 }
 
+# select_enabled_torrent_indexer_ids <indexers-json>
+# Echoes a space-separated list of ids for enabled, protocol=torrent indexers,
+# given the JSON array GET /api/v1/indexer returns (or a per-id GET result
+# wrapped in an array). Used by scripts/tag-vpn-indexers to find candidates for
+# the `vpn` tag; does not consider whether a candidate already carries it —
+# that is a separate per-indexer check against its own `tags` array.
+#
+# `enable` may arrive as a JSON boolean (json_extract turns true/false into the
+# integers 1/0) or as a quoted string ("true"/"false") depending on indexer
+# shape — IN (1,'true') matches the same convention assert_torrent_indexers_tagged
+# uses above, so the two checks never disagree about what "enabled" means.
+select_enabled_torrent_indexer_ids() {
+  jexpr "$1" "(SELECT group_concat(json_extract(value,'\$.id'),' ')
+    FROM json_each(j)
+    WHERE json_extract(value,'\$.protocol')='torrent'
+      AND json_extract(value,'\$.enable') IN (1,'true'))"
+}
+
 # fetch_indexers — Prowlarr's indexer list as JSON. Overridable in tests.
 # The indexer's protocol is only available here: Prowlarr's database has no
 # protocol column, and Implementation (Newznab/Torznab/Cardigann) does not

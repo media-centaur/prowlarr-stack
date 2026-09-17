@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# scripts/tag-vpn-indexers — tag every enabled torrent-protocol indexer with
+# `vpn` so Prowlarr's indexer proxy (an Http proxy at gluetun:8888, scoped to
+# indexers carrying the `vpn` tag) routes its searches AND grabs through the
+# tunnel.
+#
+# Protocol is not stored in prowlarr.db (Implementation is Newznab/Torznab/
+# Cardigann — Cardigann is definition-driven and can be either protocol), so
+# this reads GET /api/v1/indexer, which needs the stack running. That's why
+# this is a script invoked after start rather than an offline migration.
+#
+# Idempotent; never removes tags; leaves usenet indexers alone. Unlike
+# tag-cf-indexers, this never tests or re-tests an indexer — selection is by
+# protocol alone, not by probing for a Cloudflare block.
+#
+# Requires the stack running (reads Prowlarr's API on localhost:9696) and sqlite3.
+#
+# Usage: tag-vpn-indexers [--dry-run] [--url URL]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+# shellcheck source=lib/common
+source scripts/lib/common
+
+DRY_RUN=0
+URL="http://127.0.0.1:9696"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; shift ;;
+    --url) URL="${2:?}"; shift 2 ;;
+    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    *) die "unknown flag: $1 (try --help)" ;;
+  esac
+done
+
+# Gate first: a usenet-only install has no gluetun/vpn proxy to route through,
+# and must never call Prowlarr's API on its account.
+vpn_profile_active || { log_info "no VPN configured — nothing to tag"; exit 0; }
+
+command -v sqlite3 >/dev/null || die "sqlite3 is required"
+KEY=$(fetch_prowlarr_api_key) || die "could not read Prowlarr API key (is the stack set up and running?)"
+BASE="$URL/api/v1"
+
+_get()  { curl -fsS --max-time 30 -H "X-Api-Key: $KEY" "$BASE$1"; }
+_post() { curl -fsS --max-time 60 -X POST -H "X-Api-Key: $KEY" -H "Content-Type: application/json" -d "$2" "$BASE$1"; }
+_put()  { curl -fsS --max-time 60 -X PUT  -H "X-Api-Key: $KEY" -H "Content-Type: application/json" -d "$2" "$BASE$1"; }
+
+# --- ensure the tag exists, resolve its id ---
+# In the normal flow scripts/patch-prowlarr-db already seeded this tag offline
+# before the stack started, so this is a defensive fallback, not the common path.
+tagid=$(jexpr "$(_get /tag)" \
+  "(SELECT json_extract(value,'\$.id') FROM json_each(j) WHERE json_extract(value,'\$.label')='vpn' LIMIT 1)")
+if [[ -z "$tagid" ]]; then
+  if [[ $DRY_RUN -eq 1 ]]; then
+    log_info "(dry-run) would create tag 'vpn'"
+    tagid="?"
+  else
+    tagid=$(jexpr "$(_post /tag '{"label":"vpn"}')" "json_extract(j,'\$.id')")
+    log_ok "tag" "created 'vpn' (id $tagid)"
+  fi
+else
+  log_info "tag 'vpn' exists (id $tagid)"
+fi
+
+# --- iterate enabled torrent-protocol indexers ---
+all=$(_get /indexer)
+ids=$(select_enabled_torrent_indexer_ids "$all")
+
+n_tagged=0; n_already=0
+for id in $ids; do
+  def=$(_get "/indexer/$id")
+  name=$(jexpr "$def" "json_extract(j,'\$.name')")
+  has=$(jexpr "$def" "(SELECT COUNT(*) FROM json_each(json_extract(j,'\$.tags')) WHERE value=$tagid)")
+
+  if [[ "$has" -ge 1 ]]; then
+    log_info "$name: already tagged 'vpn'"
+    n_already=$((n_already + 1))
+    continue
+  fi
+
+  if [[ $DRY_RUN -eq 1 ]]; then
+    log_info "(dry-run) would tag '$name' with 'vpn'"
+    n_tagged=$((n_tagged + 1))
+    continue
+  fi
+
+  newdef=$(jexpr "$def" "json_insert(j,'\$.tags[#]',$tagid)")
+  _put "/indexer/$id" "$newdef" >/dev/null
+  log_ok "$name" "tagged 'vpn'"
+  n_tagged=$((n_tagged + 1))
+done
+
+echo ""
+log_info "summary: $n_tagged tagged, $n_already already tagged"

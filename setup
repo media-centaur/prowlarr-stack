@@ -509,11 +509,19 @@ if [[ -n "$provider" ]]; then
     die "aborting — VPN tunnel failed to establish"
   fi
 
-  # --- Phase 11: verify ---
+  # --- Phase 11: tag torrent indexers for vpn routing ---
+  # Must run before verify_isolation: the proxy exists but applies to nothing
+  # until each torrent-protocol indexer carries the vpn tag, and verify_isolation
+  # fails the upgrade gate on exactly that ("torrent indexers missing the vpn
+  # tag") if tagging hasn't happened yet. Non-fatal — a transient API hiccup
+  # here shouldn't abort setup; it leaves the fix as a one-line re-run instead.
+  scripts/tag-vpn-indexers || log_warn "tagging" "could not tag torrent indexers — run scripts/tag-vpn-indexers"
+
+  # --- Phase 12: verify ---
   verify_isolation || die "VPN isolation verification FAILED — see above and check docker logs gluetun"
 fi
 
-# --- Phase 12: credentials summary ---
+# --- Phase 13: credentials summary ---
 log_phase "credentials & endpoints"
 
 # Prowlarr generates the API key on first startup, then writes it back to

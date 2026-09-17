@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+set -u
+source scripts/lib/common
+
+# Mixed fixture covering every case scripts/tag-vpn-indexers must decide
+# between: an enabled usenet indexer (never selected), an enabled untagged
+# torrent indexer (must be tagged), a disabled torrent indexer (never
+# selected, even though it's the right protocol), and an enabled torrent
+# indexer that already carries the vpn tag (id 7) — must be left alone so a
+# second run of the script stays idempotent.
+FIXTURE_MIXED='[
+  {"id":1,"name":"Usenet A","protocol":"usenet","enable":true,"tags":[]},
+  {"id":2,"name":"Untagged Torrent","protocol":"torrent","enable":true,"tags":[]},
+  {"id":3,"name":"Disabled Torrent","protocol":"torrent","enable":false,"tags":[]},
+  {"id":4,"name":"Already Tagged Torrent","protocol":"torrent","enable":true,"tags":[7]}
+]'
+
+# _indexer_json_by_id <all-json> <id> — pulls one indexer's own JSON object out
+# of the bulk list. Stands in for the per-id GET /indexer/<id> response the
+# script fetches before deciding whether to PUT a tagged copy back.
+_indexer_json_by_id() {
+  jexpr "$1" "(SELECT value FROM json_each(j) WHERE json_extract(value,'\$.id')=$2)"
+}
+
+test_selects_only_enabled_torrent_indexers() {
+  local ids; ids=$(select_enabled_torrent_indexer_ids "$FIXTURE_MIXED")
+  [[ "$ids" == "2 4" ]]
+}
+
+test_selection_excludes_usenet() {
+  local ids; ids=$(select_enabled_torrent_indexer_ids "$FIXTURE_MIXED")
+  if [[ " $ids " == *" 1 "* ]]; then return 1; fi
+}
+
+test_selection_excludes_disabled_torrent() {
+  local ids; ids=$(select_enabled_torrent_indexer_ids "$FIXTURE_MIXED")
+  if [[ " $ids " == *" 3 "* ]]; then return 1; fi
+}
+
+# The protocol/enable query alone still includes an already-tagged indexer
+# (id 4) — the script only decides to skip it in a second, per-indexer check.
+# This composes both steps exactly as the script does, over the same mixed
+# fixture, to prove the end result is "exactly the enabled untagged torrent
+# indexers" as the task requires, not just what the bare selection query
+# returns on its own.
+test_composed_selection_tags_only_enabled_untagged_torrent_indexers() {
+  local tagid=7
+  local ids; ids=$(select_enabled_torrent_indexer_ids "$FIXTURE_MIXED")
+  local to_tag="" already=""
+  local id def has
+  for id in $ids; do
+    def=$(_indexer_json_by_id "$FIXTURE_MIXED" "$id")
+    has=$(jexpr "$def" "(SELECT COUNT(*) FROM json_each(json_extract(j,'\$.tags')) WHERE value=$tagid)")
+    if [[ "$has" -ge 1 ]]; then
+      already="$already $id"
+    else
+      to_tag="$to_tag $id"
+    fi
+  done
+  [[ "${to_tag# }" == "2" ]]
+  [[ "${already# }" == "4" ]]
+}
+
+# --- `enable` coercion: must match assert_torrent_indexers_tagged's convention ---
+
+test_enable_as_json_boolean_true_is_selected() {
+  local json='[{"id":1,"name":"A","protocol":"torrent","enable":true,"tags":[]}]'
+  local ids; ids=$(select_enabled_torrent_indexer_ids "$json")
+  [[ "$ids" == "1" ]]
+}
+
+test_enable_as_quoted_string_true_is_selected() {
+  local json='[{"id":1,"name":"A","protocol":"torrent","enable":"true","tags":[]}]'
+  local ids; ids=$(select_enabled_torrent_indexer_ids "$json")
+  [[ "$ids" == "1" ]]
+}
+
+test_enable_as_json_boolean_false_is_excluded() {
+  local json='[{"id":1,"name":"A","protocol":"torrent","enable":false,"tags":[]}]'
+  local ids; ids=$(select_enabled_torrent_indexer_ids "$json")
+  [[ -z "$ids" ]]
+}
+
+test_enable_as_quoted_string_false_is_excluded() {
+  local json='[{"id":1,"name":"A","protocol":"torrent","enable":"false","tags":[]}]'
+  local ids; ids=$(select_enabled_torrent_indexer_ids "$json")
+  [[ -z "$ids" ]]
+}
+
+# --- idempotence: the has-tag guard must actually recognize an existing id ---
+
+test_has_tag_check_recognizes_existing_tag_id() {
+  local def='{"id":4,"tags":[7]}'
+  local has; has=$(jexpr "$def" "(SELECT COUNT(*) FROM json_each(json_extract(j,'\$.tags')) WHERE value=7)")
+  [[ "$has" -ge 1 ]]
+}
+
+test_has_tag_check_is_false_when_tag_absent() {
+  local def='{"id":2,"tags":[]}'
+  local has; has=$(jexpr "$def" "(SELECT COUNT(*) FROM json_each(json_extract(j,'\$.tags')) WHERE value=7)")
+  [[ "$has" -eq 0 ]]
+}
+
+test_has_tag_check_recognizes_id_among_other_tags() {
+  local def='{"id":4,"tags":[2,7,9]}'
+  local has; has=$(jexpr "$def" "(SELECT COUNT(*) FROM json_each(json_extract(j,'\$.tags')) WHERE value=7)")
+  [[ "$has" -ge 1 ]]
+}
+
+test_script_is_executable() {
+  [[ -x scripts/tag-vpn-indexers ]]
+}
+
+test_script_guards_on_vpn_profile_active_before_any_other_check() {
+  # With no VPN configured (no .env, so vpn_profile_active is false) the
+  # script must exit 0 having done nothing — in particular, never reach
+  # `command -v sqlite3` or `fetch_prowlarr_api_key`, so a usenet-only
+  # install never calls Prowlarr's API. Run in an empty tmp dir standing in
+  # for the repo root so there is no .env, no config.xml, nothing to find.
+  local tmp; tmp=$(mktemp -d)
+  mkdir -p "$tmp/scripts/lib"
+  cp scripts/tag-vpn-indexers "$tmp/scripts/tag-vpn-indexers"
+  chmod +x "$tmp/scripts/tag-vpn-indexers"
+  cp scripts/lib/common "$tmp/scripts/lib/common"
+  local out rc=0
+  out=$(cd "$tmp" && ./scripts/tag-vpn-indexers 2>&1) || rc=$?
+  rm -rf "$tmp"
+  [[ $rc -eq 0 ]]
+  [[ "$out" == *"nothing to tag"* ]]
+}
