@@ -66,18 +66,19 @@ These were checked against the running stack and Prowlarr's source, not assumed.
    while the profile is inactive fails validation with `service "qbittorrent"
    depends on undefined service "gluetun": invalid compose project`.
 
-## One unverified dependency
+## Verified: gluetun bridge-inbound on 8888
 
-gluetun's HTTP proxy must accept inbound connections from sibling containers on
-the compose bridge. gluetun's firewall governs its own INPUT chain, and while the
-proxy exists to be consumed by other containers, this stack has never exercised
-it. If bridge-inbound to 8888 is dropped by default, the fix is a
-`FIREWALL_INPUT_PORTS=8888` entry on the gluetun service.
-
-**This is the first thing the implementation plan verifies**, before any other
-change lands — the whole torrent path depends on it. It could not be tested in
-advance here because this machine's tunnel is down, so gluetun has no working
-egress to prove a proxied request end to end.
+gluetun accepts bridge-inbound connections to its HTTP proxy on 8888 by
+default — `FIREWALL_INPUT_PORTS=8888` is **not** required. Verified by setting
+`HTTPPROXY=on` on the gluetun service, recreating it, and probing from a
+throwaway `alpine` container on the same compose bridge network
+(`prowlarr-stack_default`) with `nc -z -w3 gluetun 8888`, which returned
+`exit=0`. The gluetun log confirmed the proxy was listening before the probe
+ran: `2026-09-17T14:21:27+02:00 INFO [http proxy] listening on :8888`. This
+was checked with the WireGuard tunnel down (owner cancelled the VPN
+subscription, so gluetun reconnects in a loop) — irrelevant here, since the
+question is whether the firewall's INPUT chain accepts the connection, not
+whether egress works.
 
 ## Decisions
 
