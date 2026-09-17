@@ -376,19 +376,55 @@ git commit -m "feat: make VPN credentials optional in setup"
 
 - [ ] **Step 1: Update the test**
 
-In `tests/verify_services.test`, the Prowlarr probe currently expects the
-`gluetun` container as the probe subject. Change the expectation to `prowlarr`,
-and make the byparr probe conditional. Add:
+Add behavioural tests to `tests/verify_services.test`. These assert what
+`verify_services` *does*, not what its source text says — never grep the
+implementation to test it.
+
+The file already stubs `http_probe_in_container` with a URL-keyed `RESPONSES`
+table. Extend that idea: make the stub refuse the Prowlarr probe unless it is
+addressed to the `prowlarr` container, so a probe still routed through gluetun
+shows up as "prowlarr is down".
 
 ```bash
-test_prowlarr_probe_targets_prowlarr_container() {
-  grep -q 'wait_for_http prowlarr "http://127.0.0.1:9696/ping"' scripts/lib/common
+test_prowlarr_probe_targets_the_prowlarr_container() {
+  _all_healthy
+  # Answer :9696 ONLY when probed in the prowlarr container. If verify_services
+  # still probes through gluetun, prowlarr reads as down and this fails.
+  http_probe_in_container() {
+    local container="$1" url="$2"
+    if [[ "$url" == *"9696/ping"* ]]; then
+      [[ "$container" == "prowlarr" ]] || return 1
+      echo '{"status": "OK"}'
+      return 0
+    fi
+    local key
+    for key in "${!RESPONSES[@]}"; do
+      [[ "$url" == *"$key"* ]] && { echo "${RESPONSES[$key]}"; return 0; }
+    done
+    return 1
+  }
+  verify_services 5 >/dev/null 2>&1
 }
 
-test_byparr_probe_is_profile_conditional() {
-  grep -q 'vpn_profile_active' scripts/lib/common
+test_byparr_is_not_probed_without_the_vpn_profile() {
+  # byparr is absent from the project entirely when the profile is off, so a
+  # non-answering solver must not be a failure.
+  _all_healthy
+  unset 'RESPONSES[8191/health]'
+  vpn_profile_active() { return 1; }
+  verify_services 2 >/dev/null 2>&1
+}
+
+test_byparr_is_probed_under_the_vpn_profile() {
+  _all_healthy
+  unset 'RESPONSES[8191/health]'
+  vpn_profile_active() { return 0; }
+  ! verify_services 2 >/dev/null 2>&1
 }
 ```
+
+If `wait_for_http` invokes the probe in a subshell in a way that defeats the
+function override, report that rather than falling back to a source grep.
 
 - [ ] **Step 2: Run and watch it fail**
 
@@ -449,19 +485,43 @@ git commit -m "fix: probe prowlarr directly and gate byparr on the vpn profile"
 
 - [ ] **Step 1: Write the failing test**
 
+The gate currently sits inline in `check`, where it can only be tested by
+grepping the script — which this repo does not do. Extract it into
+`scripts/lib/common` as a function first, then test the function's behaviour.
+
 Create `tests/check_gluetun_gate.test`:
 
 ```bash
 #!/usr/bin/env bash
 set -u
+source "./scripts/lib/common"
 
-test_gluetun_gate_is_guarded_by_profile() {
-  # The fatal gluetun health block must sit inside a vpn_profile_active guard.
-  grep -q 'if vpn_profile_active; then' check
+# Stub the health lookup; the real one shells out to docker inspect.
+_with_health() { gluetun_health_status() { echo "$1"; }; }
+
+test_tunnel_gate_passes_when_gluetun_healthy() {
+  vpn_profile_active() { return 0; }
+  _with_health healthy
+  assert_tunnel_healthy >/dev/null 2>&1
 }
 
-test_gluetun_gate_still_fatal_under_profile() {
-  grep -q 'gluetun is not healthy' check
+test_tunnel_gate_fails_when_gluetun_unhealthy() {
+  vpn_profile_active() { return 0; }
+  _with_health unhealthy
+  ! assert_tunnel_healthy >/dev/null 2>&1
+}
+
+test_tunnel_gate_fails_when_gluetun_missing() {
+  vpn_profile_active() { return 0; }
+  _with_health missing
+  ! assert_tunnel_healthy >/dev/null 2>&1
+}
+
+test_tunnel_gate_is_skipped_without_the_vpn_profile() {
+  # No VPN configured: gluetun is absent by design, so its absence is not a fault.
+  vpn_profile_active() { return 1; }
+  _with_health missing
+  assert_tunnel_healthy >/dev/null 2>&1
 }
 ```
 
@@ -472,20 +532,36 @@ Expected: `FAIL ...::test_gluetun_gate_is_guarded_by_profile`.
 
 - [ ] **Step 3: Guard the gate**
 
-In `check`, wrap the gluetun block:
+Move the gate into `scripts/lib/common` as two functions — one that reads the
+status (stubbable), one that decides:
 
 ```bash
-if vpn_profile_active; then
+# gluetun_health_status — the container's health, or "missing" if absent.
+gluetun_health_status() {
+  docker inspect --format '{{.State.Health.Status}}' gluetun 2>/dev/null || echo "missing"
+}
+
+# assert_tunnel_healthy — fatal gate, but only when a VPN is configured.
+# With no VPN the gluetun container is absent by design, not broken.
+assert_tunnel_healthy() {
+  if ! vpn_profile_active; then
+    log_info "no VPN configured — skipping tunnel checks"
+    return 0
+  fi
   log_phase "gluetun health"
-  status=$(docker inspect --format '{{.State.Health.Status}}' gluetun 2>/dev/null || echo "missing")
+  local status; status=$(gluetun_health_status)
   case "$status" in
-    healthy) log_ok "gluetun" "$status" ;;
-    missing) die "gluetun container is not running — start the stack first" ;;
-    *) log_fail "gluetun" "$status"; die "gluetun is not healthy — check: docker logs gluetun" ;;
+    healthy) log_ok "gluetun" "$status"; return 0 ;;
+    missing) log_fail "gluetun" "container is not running — start the stack first"; return 1 ;;
+    *) log_fail "gluetun" "$status — check: docker logs gluetun"; return 1 ;;
   esac
-else
-  log_info "no VPN configured — skipping tunnel checks"
-fi
+}
+```
+
+Then `check`'s inline block collapses to:
+
+```bash
+assert_tunnel_healthy || die "gluetun is not healthy — check: docker logs gluetun"
 ```
 
 - [ ] **Step 4: Run the tests**
@@ -866,14 +942,32 @@ git commit -m "docs: empirically confirm tag-scoped proxying of search and grab"
 
 - [ ] **Step 1: Extend the test**
 
+Assert the **resolved** compose configuration rather than the file's text —
+`docker compose config` is the behaviour that matters, and a grep over source
+would pass on a commented-out line.
+
 ```bash
 test_gluetun_exposes_http_proxy() {
-  grep -q 'HTTPPROXY=on' docker-compose.yml
+  local root; root=$(mktemp -d)
+  cp docker-compose.yml docker-compose.qbt-vpn.yml "$root/"
+  printf 'COMPOSE_PROFILES=vpn\nDOWNLOADS_DIR=/tmp/d\nCOMPLETED_DIR=/tmp/c\n' > "$root/.env"
+  local env_json
+  env_json=$( (cd "$root" && docker compose config --format json) \
+    | python3 -c 'import sys,json; print(json.dumps(json.load(sys.stdin)["services"]["gluetun"]["environment"]))')
+  rm -rf "$root"
+  [[ "$env_json" == *'"HTTPPROXY": "on"'* || "$env_json" == *'HTTPPROXY=on'* ]]
 }
 
 test_http_proxy_is_not_published_to_the_host() {
-  # 8888 must never appear in a ports: mapping — bridge-only.
-  ! grep -qE '^\s+- "8888:8888"' docker-compose.yml
+  # 8888 is bridge-only: reachable by sibling containers, never bound on the host.
+  local root; root=$(mktemp -d)
+  cp docker-compose.yml docker-compose.qbt-vpn.yml "$root/"
+  printf 'COMPOSE_PROFILES=vpn\nDOWNLOADS_DIR=/tmp/d\nCOMPLETED_DIR=/tmp/c\n' > "$root/.env"
+  local published
+  published=$( (cd "$root" && docker compose config --format json) \
+    | python3 -c 'import sys,json; s=json.load(sys.stdin)["services"]; print(" ".join(str(p.get("published","")) for v in s.values() for p in v.get("ports",[])))')
+  rm -rf "$root"
+  [[ "$published" != *8888* ]]
 }
 ```
 
