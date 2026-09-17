@@ -7,6 +7,23 @@ cd "$(dirname "$0")/.." || exit 1
 pass=0
 fail=0
 
+# Guard: bash exempts `!`-inverted commands from `set -e`, so a `! cmd`
+# assertion asserts NOTHING unless it is a function's final statement — and one
+# line added below it silently kills it. 48 such assertions were found inert in
+# this suite (2026-09-17), including the guards protecting the WireGuard key in
+# ./backup. Use refute / refute_grep from tests/lib/assert instead.
+bad=$(grep -nE '(^|[;{&|(])[[:space:]]*![[:space:]]' tests/*.test 2>/dev/null \
+        | grep -v '!=' \
+        | grep -vE '^[^:]*:[0-9]+:[[:space:]]*#' || true)
+if [[ -n "$bad" ]]; then
+  echo "refusing to run — negated assertions are exempt from set -e:"
+  echo "$bad" | sed 's/^/  /'
+  echo ""
+  echo "  use:  refute <cmd>              (simple commands)"
+  echo "        if <cmd>; then return 1; fi   (subshells, pipelines)"
+  exit 1
+fi
+
 shopt -s nullglob
 for file in tests/*.test; do
   # Each test file defines test_* functions and registers itself via a convention.
