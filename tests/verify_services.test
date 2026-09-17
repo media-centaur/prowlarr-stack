@@ -24,6 +24,12 @@ http_probe_in_container() {
   return 1
 }
 
+# The vpn profile defaults to INACTIVE for these tests. Without this, the suite
+# would read whatever COMPOSE_PROFILES happens to be in a developer's gitignored
+# .env, so a checkout used to run the stack would test differently from a fresh
+# clone. Tests that need byparr in play turn it on explicitly.
+vpn_profile_active() { return 1; }
+
 _all_healthy() {
   RESPONSES=(
     ["9696/ping"]='{"status": "OK"}'
