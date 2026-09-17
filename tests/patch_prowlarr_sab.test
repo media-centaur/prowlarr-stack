@@ -40,7 +40,11 @@ test_refuses_missing_db() { refute "$SCRIPT" /nonexistent/x.db "192.168.1.10" "8
 
 test_validates_host() {
   local db; db=$(_make_db)
-  refute "$SCRIPT" "$db" "not-an-ip" "8085" 2>/dev/null
+  # 'not-an-ip' used to be the invalid case, but bare service names are now
+  # valid hosts (Prowlarr reaches the clients over the compose bridge), and
+  # it is a legal single-label DNS name. Use input that is malformed under
+  # either rule.
+  refute "$SCRIPT" "$db" "not a host!" "8085" 2>/dev/null
   rm -f "$db"
 }
 

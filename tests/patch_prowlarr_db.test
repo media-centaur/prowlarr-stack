@@ -36,7 +36,11 @@ test_patcher_refuses_missing_db() {
 test_patcher_validates_host() {
   local tmp; tmp=$(mktemp --suffix=.db)
   cp "$FIXTURE" "$tmp"
-  refute "$SCRIPT" "$tmp" "not-an-ip" "8080" 2>/dev/null
+  # 'not-an-ip' used to be the invalid case, but bare service names are now
+  # valid hosts (Prowlarr reaches the clients over the compose bridge), and
+  # it is a legal single-label DNS name. Use input that is malformed under
+  # either rule.
+  refute "$SCRIPT" "$tmp" "not a host!" "8080" 2>/dev/null
   rm -f "$tmp"
 }
 
