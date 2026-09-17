@@ -2,7 +2,9 @@
 
 A self-hosted stack for discovering and downloading torrents on your home server. One command sets it up; another updates it; another tears it down.
 
-Indexer queries (and optionally torrent traffic) are routed through a WireGuard VPN tunnel — that's the point of this stack. If you don't want a VPN in the loop, [linuxserver/prowlarr](https://docs.linuxserver.io/images/docker-prowlarr/) is a simpler one-container option.
+Torrent indexer queries and grabs are routed through a WireGuard VPN tunnel — most torrent sites are ISP-blocked, and peers see your address. Usenet indexers run direct, because only your paid news server ever sees your address, over TLS.
+
+A VPN is optional. Configure one to use torrent indexers, or leave it blank for a usenet-only stack.
 
 ## What's in the stack
 

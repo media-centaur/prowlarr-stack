@@ -72,6 +72,25 @@ It tests each enabled indexer and tags only the Cloudflare-blocked ones with `by
 
 If a Cloudflare-fronted indexer keeps failing after tagging, check `docker logs byparr` — you should see "Challenge detected, attempting to solve". Note that the solver egresses through gluetun's VPN IP, which Cloudflare treats as low-trust; the hardest sites can still time out regardless of solver, in which case the fix is a residential/mobile egress proxy (byparr `PROXY_SERVER`).
 
+### Torrent indexers need the `vpn` tag
+
+Prowlarr applies an indexer proxy only to indexers sharing a tag with it, so a
+torrent indexer routes through the VPN only while it carries the `vpn` tag.
+Without it the queries and grabs go out over your ISP connection, where most
+torrent sites are blocked anyway.
+
+`./setup` tags every enabled torrent-protocol indexer for you. If you add one
+afterwards, tag it in Prowlarr or run:
+
+```sh
+~/prowlarr-stack/scripts/tag-vpn-indexers          # --dry-run to preview
+```
+
+`./check` fails when an enabled torrent indexer is missing the tag, so an
+untagged one stops the next upgrade rather than quietly leaking.
+
+Usenet indexers take no tag and run direct.
+
 ## Optimizing for speed
 
 The single biggest lever is **fewer enabled indexers, all healthy**. Beyond a small set the marginal new indexer adds more tail latency than it does coverage.

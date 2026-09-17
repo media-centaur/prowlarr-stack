@@ -12,7 +12,15 @@ All notable changes to prowlarr-stack are documented here. Format follows
   generates is left out and rebuilt on the new install, including your WireGuard
   key, which a settings bundle never contains.
 ### Changed
+- **A VPN is now optional, and only torrent traffic uses it.** Prowlarr used to
+  run inside the tunnel's network namespace, so every indexer depended on the
+  VPN — including usenet indexers, which never needed one. Prowlarr now runs
+  directly and torrent indexers reach the tunnel through a tagged proxy. Leave
+  the VPN provider blank at setup for a usenet-only stack.
+
 ### Fixed
+- **A lapsed or broken VPN no longer takes every indexer offline.** Usenet search
+  keeps working; only torrent indexers stop.
 
 ## [1.2.1] - 2026-09-06
 

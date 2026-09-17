@@ -4,33 +4,41 @@ Technical details for curious users and contributors. If you just want to instal
 
 ## Traffic routing
 
-The stack supports two qBittorrent topologies, picked at install time and persisted in `.env` via `QBITTORRENT_USE_VPN`.
+Egress is a property of the upstream, not of the stack. Torrent sites are widely
+ISP-blocked and expose your address to peers, so torrent traffic goes through the
+tunnel. Usenet does not: only your paid news server sees your address, over TLS.
 
-**Direct mode (default, `QBITTORRENT_USE_VPN=0`)** — qBittorrent runs on the docker bridge, outside the tunnel:
+| Upstream | Route | Mechanism |
+|---|---|---|
+| Usenet indexers | Direct | no tag |
+| Torrent indexers | Tunnel | `vpn` tag → `Http` indexer proxy → `gluetun:8888` |
+| Cloudflare-gated torrent indexers | Tunnel | `byparr` tag → FlareSolverr proxy → `gluetun:8191` |
+| Prowlarr → SABnzbd / qBittorrent API | Compose bridge | service name |
+| SABnzbd | Direct | — |
+| qBittorrent | Direct, or tunnel | `QBITTORRENT_USE_VPN` |
 
-| Traffic                            | Route                                  |
-| ---------------------------------- | -------------------------------------- |
-| Prowlarr indexer lookups           | VPN tunnel (WireGuard via gluetun)     |
-| byparr Cloudflare challenges       | VPN tunnel (WireGuard via gluetun)     |
-| Prowlarr → qBittorrent API push    | LAN (gluetun firewall bypass)          |
-| qBittorrent peer swarm             | Direct ISP                             |
-| qBittorrent tracker announce       | Direct ISP                             |
+Prowlarr runs on the compose bridge and publishes its own port. gluetun exposes
+the tunnel as an HTTP proxy on 8888, reachable by sibling containers and never
+published to the host. Prowlarr applies an indexer proxy only to indexers that
+share a tag with it, which is what makes routing per-indexer rather than
+per-container.
 
-This split is the recommended default: indexer searches go through the VPN so they aren't visible to your ISP, while downloads stay on the direct path to avoid paying VPN-throughput overhead on every byte. Most VPN providers also don't forward inbound ports — direct mode keeps qBittorrent able to seed.
+With no VPN configured, `COMPOSE_PROFILES` is empty: gluetun and byparr are
+absent from the project, nothing backs the `vpn` tag, and torrent indexers are
+unusable. Usenet is unaffected. `./setup` accepts a blank VPN provider for this.
 
-**Tunneled mode (opt-in, `QBITTORRENT_USE_VPN=1`)** — qBittorrent joins gluetun's network namespace:
+**Kill-switch.** gluetun's firewall drops egress that is not through the tunnel.
+Prowlarr itself no longer loses connectivity when the tunnel drops, since it is
+not in the namespace — but `vpn`-tagged indexers do, because the proxy listens
+only inside it. A dropped tunnel gives them connection-refused, never a
+fallthrough to the ISP. qBittorrent is covered only when `QBITTORRENT_USE_VPN=1`.
 
-| Traffic                            | Route                                  |
-| ---------------------------------- | -------------------------------------- |
-| Prowlarr indexer lookups           | VPN tunnel                             |
-| byparr Cloudflare challenges       | VPN tunnel                             |
-| Prowlarr → qBittorrent API push    | localhost (shared netns, no LAN hop)   |
-| qBittorrent peer swarm             | VPN tunnel                             |
-| qBittorrent tracker announce       | VPN tunnel                             |
-
-In tunneled mode qBittorrent's host-facing ports (8080/6881) are published by gluetun rather than qBittorrent itself — this is required because a container with `network_mode: "service:gluetun"` cannot publish its own ports.
-
-**Kill-switch.** Gluetun's default firewall drops any egress that isn't through the tunnel. If the tunnel drops, Prowlarr and byparr lose all internet connectivity until it recovers — they don't fall through to the ISP path. In direct mode, qBittorrent is unaffected because it never used the tunnel. In tunneled mode, qBittorrent is also covered by the kill-switch — when the tunnel drops, qBT's traffic is dropped too, which is the whole point of opting in.
+**Leak surface.** Per-indexer routing is fail-open where namespace membership was
+fail-closed: a torrent indexer added without the `vpn` tag would query over the
+ISP path. `./setup` tags every torrent-protocol indexer through
+`scripts/tag-vpn-indexers`, and `./check` fails when an enabled torrent indexer
+lacks the tag — so drift fails the upgrade gate instead of leaking quietly. The
+residual gap is an indexer added between runs of `setup` and `check`.
 
 ## Container topology
 
@@ -117,15 +125,16 @@ prowlarr-stack/
 `./setup` runs these in order. Any failure stops the script with a precise error message.
 
 1. **Prerequisites** — docker, docker compose, sqlite3, python3, the `ip` command, `findmnt` (util-linux, used by storage path validation), `systemctl --user` (the installer enables a user-scope unit for autostart on reboot).
-2. **Configuration** — VPN provider, WireGuard key (with provider-specific hints), optional `WIREGUARD_ADDRESSES` and `WIREGUARD_PRESHARED_KEY`, exit country, host LAN IP, LAN subnet, `DOWNLOADS_DIR`, `COMPLETED_DIR`, `QBITTORRENT_USE_VPN` (direct vs. tunneled qBT routing — see [Traffic routing](#traffic-routing)). Auto-detects LAN values; validates each input before accepting.
-3. **Write `.env`** — atomic (tmp file + rename), `chmod 600` before rename. Also writes `COMPOSE_FILE` so docker compose picks up the right overlay (`docker-compose.yml` alone in direct mode, `docker-compose.yml:docker-compose.qbt-vpn.yml` in tunneled mode).
+2. **Configuration** — VPN provider and WireGuard key, both **optional** (blank gives a usenet-only stack); with a provider, also the exit country and optional `WIREGUARD_ADDRESSES` / `WIREGUARD_PRESHARED_KEY`. Then host LAN IP, LAN subnet, `DOWNLOADS_DIR`, `COMPLETED_DIR`, and `QBITTORRENT_USE_VPN` (offered only when a VPN is configured — see [Traffic routing](#traffic-routing)). Auto-detects LAN values; validates each input before accepting.
+3. **Write `.env`** — atomic (tmp file + rename), `chmod 600` before rename. Writes `COMPOSE_PROFILES=vpn` when a VPN is configured, which is what brings gluetun and byparr into the project at all, and `COMPOSE_FILE` for the qBT overlay (`docker-compose.yml` alone in direct mode, `docker-compose.yml:docker-compose.qbt-vpn.yml` in tunneled mode).
 4. **Seed `config/`** — copy from `defaults/` if the destination doesn't exist (idempotent; re-runs don't clobber state).
-5. **Patch `prowlarr.db`** — rewrites the qBittorrent download-client row's host + port. Direct mode uses `${HOST_LAN_IP}:8080`; tunneled mode uses `127.0.0.1:8080` (since prowlarr and qBT share gluetun's netns). Uses SQLite's `json_set`, so it's idempotent.
+5. **Patch `prowlarr.db`** — rewrites the download-client rows to compose service names, since Prowlarr reaches the clients over the bridge: `qbittorrent:8080` direct, `gluetun:8080` when tunneled (a tunneled client shares gluetun's namespace and has no name of its own), `sabnzbd:8080`. With a VPN configured, also seeds the `vpn` tag and the `Http` indexer proxy at `gluetun:8888`, and re-points byparr's FlareSolverr proxy to `gluetun:8191`. Uses SQLite's `json_set`, so it's idempotent.
 6. **Storage paths** — `validate_storage_paths` checks each of `DOWNLOADS_DIR` / `COMPLETED_DIR` via `findmnt --target`: each must exist as a directory and (unless `ALLOW_NON_MOUNTPOINT=1`) must live on a mount that isn't `/`. Subdirectories of a mount count — `/mnt/videos/downloads` inside a `/mnt/videos` mount is fine. In interactive mode, offers to opt into `ALLOW_NON_MOUNTPOINT=1` if a path is on the root fs; in `--non-interactive` mode (used by `restore`), hard-fails. The systemd unit gets `RequiresMountsFor=` for these paths unless the opt-out is active.
 7. **Systemd user service** — installs `~/.config/systemd/user/prowlarr-stack.service`, runs `daemon-reload + enable`.
 8. **Start** — `docker compose up -d`.
-9. **Wait for tunnel** — polls gluetun's healthcheck until green (60s timeout).
-10. **Verify isolation** — fetches the external IP from inside `prowlarr` and `qbittorrent` via `api.ipify.org`. In direct mode, the two IPs must *differ* (same IP means prowlarr is leaking past the VPN). In tunneled mode, they must *match* (different IPs means qBT escaped the tunnel). Dumps gluetun's recent log on failure.
+9. **Wait for tunnel** — polls gluetun's healthcheck until green (60s timeout). Skipped entirely with no VPN configured.
+10. **Tag torrent indexers** — `scripts/tag-vpn-indexers` puts the `vpn` tag on every enabled torrent-protocol indexer, so the proxy seeded in phase 5 actually applies to something. Runs before the check below, which would otherwise fail on an untagged indexer. Non-fatal.
+11. **Verify isolation** — asserts every enabled torrent indexer carries the `vpn` tag, and that the tunnel's exit IP differs from the direct one. With no VPN, asserts instead that no enabled torrent indexer exists — one could not reach an ISP-blocked site, and would leak if it could. Dumps gluetun's recent log on failure.
 
 `./setup --reconfigure` forces the configuration prompts to re-appear (existing values shown as defaults). `./setup --non-interactive` skips prompts and fails fast on any missing required variable — used by `./update`.
 
