@@ -110,6 +110,39 @@ manager, encrypted volume, or another safe location. As a guard rail,
 `./backup` refuses to write into a directory containing `.git/` or
 `.jj/`.
 
+### Settings only
+
+A full backup reproduces *this* install, generated values and all. To rebuild
+from scratch instead — a clean install, a new machine — a settings bundle
+carries only what you supplied and would otherwise have to type in again.
+
+```sh
+~/prowlarr-stack/backup --settings-only
+# → $HOME/prowlarr-stack-settings-<host>-<UTC>.tar.gz  (mode 600)
+```
+
+| Carried | Regenerated on the new install |
+|---|---|
+| Storage paths | Prowlarr and SABnzbd API keys |
+| Usenet server host, username, password | qBittorrent password |
+| Prowlarr indexers, with their tags | Download-client and indexer-proxy wiring |
+| SABnzbd categories and tuning | `HOST_LAN_IP`, `LAN_SUBNET` |
+| | VPN credentials, including your WireGuard key |
+
+Your VPN details are not in a settings bundle; you enter them during install.
+The bundle does still hold your usenet password and indexer API keys, so store
+it the same way you would a full backup.
+
+To rebuild:
+
+1. `./backup --settings-only`, and keep the tarball somewhere safe.
+2. Install as normal.
+3. `./restore --settings-only /path/to/prowlarr-stack-settings-*.tar.gz`
+4. `./check`
+
+Step 3 merges your settings into the fresh install and leaves everything setup
+generated in place. Running it twice changes nothing.
+
 **Restore on the same install dir:**
 
 ```sh

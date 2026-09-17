@@ -6,6 +6,11 @@ All notable changes to prowlarr-stack are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **`--settings-only` on `./backup` and `./restore`.** Carries just the settings
+  you supplied — storage paths, usenet account, indexers, SABnzbd categories — so
+  you can reinstall from scratch without re-entering them. Everything the stack
+  generates is left out and rebuilt on the new install, including your WireGuard
+  key, which a settings bundle never contains.
 ### Changed
 ### Fixed
 
