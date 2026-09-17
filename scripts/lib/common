@@ -839,6 +839,74 @@ verify_services() {
   return "$failed"
 }
 
+# fetch_download_clients — Prowlarr's download-client list as JSON
+# (GET /api/v1/downloadclient: id, name, enable, ...). Overridable in tests.
+fetch_download_clients() {
+  local key; key=$(fetch_prowlarr_api_key) || return 1
+  curl -fsS --max-time 30 -H "X-Api-Key: $key" "http://127.0.0.1:9696/api/v1/downloadclient"
+}
+
+# fetch_download_client_tests — POST /api/v1/downloadclient/testall. Prowlarr
+# connects to every enabled client and answers [{id, isValid,
+# validationFailures}]. The status is 400 whenever any client fails, so curl's
+# -f would throw away exactly the body that says why; the exit code here only
+# means "Prowlarr answered". Overridable in tests.
+fetch_download_client_tests() {
+  local key; key=$(fetch_prowlarr_api_key) || return 1
+  curl -sS --max-time 120 -X POST -H "X-Api-Key: $key" "http://127.0.0.1:9696/api/v1/downloadclient/testall"
+}
+
+# verify_download_clients [timeout_seconds]
+# Asserts Prowlarr can actually talk to every enabled download client, by
+# having Prowlarr run its own connection test. verify_services proves each
+# container answers on its own port; it says nothing about whether Prowlarr's
+# row for a client names the right host and port, or whether the client accepts
+# being addressed that way — v1.3.0 passed the gate with every container up and
+# every usenet grab failing. Polls until every client tests valid or the budget
+# runs out, since a client may still be starting right after a restart.
+verify_download_clients() {
+  local timeout="${1:-120}"
+  local interval="${HTTP_POLL_INTERVAL:-3}"
+  local deadline=$(( $(date +%s) + timeout ))
+  log_phase "download clients"
+
+  local body results="" invalid=""
+  while :; do
+    if body=$(fetch_download_client_tests 2>/dev/null) \
+       && [[ "$(jexpr "$body" "json_valid(j)" 2>/dev/null)" == "1" ]]; then
+      results="$body"
+      invalid=$(jexpr "$results" "(SELECT COUNT(*) FROM json_each(j)
+        WHERE json_extract(value,'\$.isValid') NOT IN (1,'true'))")
+      [[ "$invalid" == "0" ]] && break
+    fi
+    (( $(date +%s) + interval < deadline )) || break
+    sleep "$interval"
+  done
+
+  if [[ -z "$results" ]]; then
+    log_fail "prowlarr" "download-client test did not answer within ${timeout}s"
+    log_info "check: docker logs prowlarr"
+    return 1
+  fi
+
+  local names; names=$(fetch_download_clients 2>/dev/null) || names='[]'
+  local id valid name errors
+  for id in $(jexpr "$results" "(SELECT group_concat(json_extract(value,'\$.id'),' ') FROM json_each(j))"); do
+    valid=$(jexpr "$results" "(SELECT json_extract(value,'\$.isValid') FROM json_each(j) WHERE json_extract(value,'\$.id')=$id)")
+    name=$(jexpr "$names" "(SELECT json_extract(value,'\$.name') FROM json_each(j) WHERE json_extract(value,'\$.id')=$id)" 2>/dev/null)
+    [[ -n "$name" ]] || name="download client $id"
+    if [[ "$valid" == "1" || "$valid" == "true" ]]; then
+      log_ok "$name" "Prowlarr connected"
+    else
+      errors=$(jexpr "$results" "(SELECT group_concat(json_extract(f.value,'\$.errorMessage'),'; ')
+        FROM json_each(j) r, json_each(json_extract(r.value,'\$.validationFailures')) f
+        WHERE json_extract(r.value,'\$.id')=$id)")
+      log_fail "$name" "${errors:-connection test failed}"
+    fi
+  done
+  [[ "$invalid" == "0" ]]
+}
+
 # fetch_prowlarr_api_key [config_path]
 # Extracts <ApiKey>...</ApiKey> from prowlarr's config.xml.
 fetch_prowlarr_api_key() {

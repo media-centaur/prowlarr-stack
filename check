@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Standalone health + VPN-isolation verifier for prowlarr-stack.
 #
-# Two gates, both fatal, because ./update uses this script to decide whether an
+# Three gates, all fatal, because ./update uses this script to decide whether an
 # upgrade stands or gets rolled back:
-#   1. service health — every application container actually answers.
-#   2. VPN isolation  — traffic is routed per the configured topology.
+#   1. service health    — every application container actually answers.
+#   2. download clients  — Prowlarr's own connection test passes for each client.
+#   3. VPN isolation     — traffic is routed per the configured topology.
 #
-# Both run even if the first fails, so a single invocation reports everything
-# that is wrong rather than only the first problem.
+# All run even if an earlier one fails, so a single invocation reports
+# everything that is wrong rather than only the first problem.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -20,6 +21,7 @@ assert_tunnel_healthy || die "gluetun is not healthy — check: docker logs glue
 
 failed=0
 verify_services "$SERVICE_TIMEOUT" || failed=1
+verify_download_clients "$SERVICE_TIMEOUT" || failed=1
 verify_isolation || failed=1
 
 if [[ $failed -ne 0 ]]; then

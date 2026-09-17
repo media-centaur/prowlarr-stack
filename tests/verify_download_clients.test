@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# The upgrade gate must exercise Prowlarr's links to its download clients, not
+# just each container's own endpoint: v1.3.0 shipped with every container
+# answering and every usenet grab failing, and ./check let it through.
+set -u
+
+# shellcheck source=../scripts/lib/common
+source "./scripts/lib/common"
+
+export HTTP_POLL_INTERVAL=1
+
+CLIENTS='[{"id":1,"name":"qBittorrent","enable":true},{"id":2,"name":"SABnzbd","enable":true}]'
+ALL_VALID='[{"id":1,"isValid":true,"validationFailures":[]},{"id":2,"isValid":true,"validationFailures":[]}]'
+SAB_INVALID='[{"id":1,"isValid":true,"validationFailures":[]},{"id":2,"isValid":false,"validationFailures":[{"propertyName":"Host","errorMessage":"Unable to connect to SABnzbd","severity":"error"}]}]'
+
+# Stubs for the two Prowlarr API calls the gate makes.
+fetch_download_clients() { echo "$CLIENTS"; }
+fetch_download_client_tests() { echo "$ALL_VALID"; }
+
+test_passes_when_every_client_tests_valid() {
+  verify_download_clients 2 >/dev/null 2>&1
+}
+
+test_fails_when_a_client_tests_invalid() {
+  fetch_download_client_tests() { echo "$SAB_INVALID"; }
+  refute verify_download_clients 1 >/dev/null 2>&1
+}
+
+test_failure_names_the_client_and_the_error() {
+  fetch_download_client_tests() { echo "$SAB_INVALID"; }
+  local out
+  out=$(verify_download_clients 1 2>&1) || true
+  grep -q "SABnzbd" <<<"$out" && grep -q "Unable to connect to SABnzbd" <<<"$out"
+}
+
+test_retries_until_the_clients_come_up() {
+  # Right after a restart a client may still be starting; a single-shot probe
+  # would roll back a good upgrade. The counter lives in a file because the
+  # stub runs inside a command substitution.
+  local counter; counter=$(mktemp)
+  _stub_counter="$counter"
+  fetch_download_client_tests() {
+    echo x >> "$_stub_counter"
+    if [[ "$(wc -l < "$_stub_counter")" -lt 2 ]]; then echo "$SAB_INVALID"; else echo "$ALL_VALID"; fi
+  }
+  verify_download_clients 5 >/dev/null 2>&1
+  local calls; calls=$(wc -l < "$counter")
+  rm -f "$counter"
+  [[ "$calls" -ge 2 ]]
+}
+
+test_fails_when_prowlarr_does_not_answer() {
+  fetch_download_client_tests() { return 1; }
+  refute verify_download_clients 1 >/dev/null 2>&1
+}
+
+test_check_runs_the_download_client_gate() {
+  grep -q 'verify_download_clients' check
+}
