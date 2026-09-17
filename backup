@@ -9,11 +9,20 @@
 # contains your WireGuard private key — a single accidental commit and you're
 # leaking secrets to the world.
 #
+# --settings-only writes a much smaller tarball carrying just what you
+# supplied — storage paths, usenet account, Prowlarr indexer definitions,
+# SABnzbd settings — via scripts/settings-bundle export. It excludes API keys,
+# passwords, and machine-derived wiring, which ./setup regenerates; restore it
+# into a freshly-installed stack with ./restore --settings-only to rebuild
+# without re-entering anything. The stack is never stopped for this — the
+# exporter opens SQLite read-only.
+#
 # Flags:
-#   --output PATH   write tarball here (override default $HOME location)
-#   --no-stop       skip stopping the stack before snapshotting (faster, but
-#                   SQLite writes during tar can produce an inconsistent .db)
-#   --yes           skip confirmations
+#   --output PATH     write tarball here (override default $HOME location)
+#   --no-stop         skip stopping the stack before snapshotting (faster, but
+#                     SQLite writes during tar can produce an inconsistent .db)
+#   --settings-only   export only the user-supplied settings subset (see above)
+#   --yes             skip confirmations
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -22,6 +31,7 @@ source scripts/lib/common
 
 OUTPUT=""
 NO_STOP=0
+SETTINGS_ONLY=0
 YES=0
 
 while [[ $# -gt 0 ]]; do
@@ -29,19 +39,28 @@ while [[ $# -gt 0 ]]; do
     --output) OUTPUT="${2:-}"; shift 2 ;;
     --output=*) OUTPUT="${1#--output=}"; shift ;;
     --no-stop) NO_STOP=1; shift ;;
+    --settings-only) SETTINGS_ONLY=1; shift ;;
     --yes) YES=1; shift ;;
     -h|--help)
       cat <<HELP
-Usage: ./backup [--output PATH] [--no-stop] [--yes]
+Usage: ./backup [--output PATH] [--no-stop] [--settings-only] [--yes]
 
-  --output PATH   tarball path (default: \$HOME/prowlarr-stack-backup-<host>-<UTC>.tar.gz)
-  --no-stop       don't stop the stack before tarring (risks SQLite WAL inconsistency)
-  --yes           skip confirmations
+  --output PATH      tarball path (default: \$HOME/prowlarr-stack-backup-<host>-<UTC>.tar.gz,
+                      or prowlarr-stack-settings-<host>-<UTC>.tar.gz with --settings-only)
+  --no-stop          don't stop the stack before tarring (risks SQLite WAL inconsistency;
+                      irrelevant with --settings-only, which never stops the stack)
+  --settings-only    export only what you supplied — storage paths, usenet account,
+                      indexer definitions, SABnzbd settings. Excludes API keys,
+                      passwords, and machine-derived wiring, which ./setup regenerates.
+                      Restore into a fresh install with: ./restore --settings-only
+  --yes              skip confirmations
 
-The output tarball contains your WireGuard private key and qBittorrent
-password. Treat it like a credential file. Default location is your home
-directory; this script refuses to write into directories containing .git/
-or .jj/ to avoid accidental commits to a public repo.
+A full backup's tarball contains your WireGuard private key and qBittorrent
+password. A --settings-only tarball is smaller but still holds your usenet
+account password and Prowlarr indexer API keys. Treat either like a
+credential file. Default location is your home directory; this script
+refuses to write into directories containing .git/ or .jj/ to avoid
+accidental commits to a public repo.
 HELP
       exit 0
       ;;
@@ -55,13 +74,20 @@ for required in docker-compose.yml setup scripts/lib/common; do
 done
 [[ -f .env ]] || die ".env not found — there's nothing to back up; run ./install first"
 [[ -d config ]] || die "config/ not found — there's nothing to back up; run ./setup first"
+if [[ $SETTINGS_ONLY -eq 1 ]]; then
+  [[ -x scripts/settings-bundle ]] || die "scripts/settings-bundle not found — required for --settings-only"
+fi
 
 # --- Resolve output path ---
 # `uname -n` is always present (unlike the `hostname` binary, absent on some
 # minimal/Arch installs); take the short form.
 HOSTNAME_SHORT=$(uname -n 2>/dev/null | cut -d. -f1); [[ -n "$HOSTNAME_SHORT" ]] || HOSTNAME_SHORT="host"
 TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
-DEFAULT_NAME="prowlarr-stack-backup-${HOSTNAME_SHORT}-${TIMESTAMP}.tar.gz"
+if [[ $SETTINGS_ONLY -eq 1 ]]; then
+  DEFAULT_NAME="prowlarr-stack-settings-${HOSTNAME_SHORT}-${TIMESTAMP}.tar.gz"
+else
+  DEFAULT_NAME="prowlarr-stack-backup-${HOSTNAME_SHORT}-${TIMESTAMP}.tar.gz"
+fi
 if [[ -z "$OUTPUT" ]]; then
   OUTPUT="$HOME/$DEFAULT_NAME"
 fi
@@ -93,12 +119,18 @@ echo ""
 echo "${COLOR_BOLD}prowlarr-stack backup${COLOR_RESET}"
 log_info "source dir:   $(pwd)"
 log_info "output:       $OUTPUT"
-if [[ $NO_STOP -eq 0 ]]; then
-  log_info "stack action: stop → tar → start (briefly offline)"
+if [[ $SETTINGS_ONLY -eq 1 ]]; then
+  log_info "scope:        settings only (storage paths, usenet account, indexer definitions, SABnzbd settings)"
+  log_info "stack action: none — read-only export; stack stays up"
+  log_warn "tarball will contain your usenet account password and Prowlarr indexer API keys — store securely."
 else
-  log_info "stack action: live snapshot (--no-stop; SQLite may be inconsistent)"
+  if [[ $NO_STOP -eq 0 ]]; then
+    log_info "stack action: stop → tar → start (briefly offline)"
+  else
+    log_info "stack action: live snapshot (--no-stop; SQLite may be inconsistent)"
+  fi
+  log_warn "tarball will contain your WireGuard private key — store securely."
 fi
-log_warn "tarball will contain your WireGuard private key — store securely."
 
 if [[ $YES -eq 0 ]]; then
   if ! prompt_yes_no "proceed?" y; then
@@ -108,8 +140,10 @@ if [[ $YES -eq 0 ]]; then
 fi
 
 # --- Stop stack (default) ---
+# Never stopped for --settings-only: the exporter opens SQLite read-only, so
+# there's no WAL-consistency risk to guard against.
 STACK_WAS_RUNNING=0
-if [[ $NO_STOP -eq 0 ]]; then
+if [[ $SETTINGS_ONLY -eq 0 && $NO_STOP -eq 0 ]]; then
   if systemctl --user is-active --quiet prowlarr-stack 2>/dev/null; then
     STACK_WAS_RUNNING=1
     log_phase "stopping stack"
@@ -130,50 +164,73 @@ restart_if_was_running() {
 }
 trap 'restart_if_was_running' EXIT
 
-# --- Build BACKUP-MANIFEST ---
-log_phase "writing BACKUP-MANIFEST"
 TMPDIR_BACKUP=$(mktemp -d)
 trap 'restart_if_was_running; rm -rf "$TMPDIR_BACKUP"' EXIT
-MANIFEST_FILE="$TMPDIR_BACKUP/BACKUP-MANIFEST"
 
-# Pull a version string if we can — prefer .version (release installs),
-# fall back to MANIFEST line 1, fall back to "unknown".
-backup_version="unknown"
-if [[ -f .version ]]; then
-  backup_version=$(cat .version)
-elif [[ -f MANIFEST ]]; then
-  backup_version=$(parse_manifest_version MANIFEST 2>/dev/null || echo "unknown")
-fi
+if [[ $SETTINGS_ONLY -eq 1 ]]; then
+  # --- Export the settings subset ---
+  log_phase "exporting settings"
+  scripts/settings-bundle export . "$TMPDIR_BACKUP"
 
-{
-  echo "schema:        1"
-  echo "created:       $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  echo "source-host:   $HOSTNAME_SHORT"
-  echo "source-user:   $(id -un)"
-  echo "stack-version: $backup_version"
+  # --- Build tarball ---
+  log_phase "creating tarball"
+  tar -czf "$OUTPUT" -C "$TMPDIR_BACKUP" SETTINGS-MANIFEST env.subset indexers.json sabnzbd.subset.ini
+
+  chmod 600 "$OUTPUT"
+  size=$(du -h "$OUTPUT" | awk '{print $1}')
+  log_ok "tarball" "$OUTPUT ($size)"
+
+  # --- Done banner ---
   echo ""
-  echo "# Files captured (paths relative to the install dir at restore time)"
-  echo "file: .env"
-  if [[ -f .envrc ]]; then echo "file: .envrc"; fi
-  echo "tree: config/"
-} > "$MANIFEST_FILE"
+  echo "${COLOR_BOLD}${COLOR_GREEN}settings backup complete.${COLOR_RESET}"
+  echo "  restore into a fresh install: ./restore --settings-only $OUTPUT"
+  echo ""
+  echo "  ${COLOR_YELLOW}!${COLOR_RESET} this file contains your usenet account password and Prowlarr indexer API keys."
+  echo "    keep it off any public repo, public cloud, or shared system."
+else
+  # --- Build BACKUP-MANIFEST ---
+  log_phase "writing BACKUP-MANIFEST"
+  MANIFEST_FILE="$TMPDIR_BACKUP/BACKUP-MANIFEST"
 
-# --- Build tarball ---
-log_phase "creating tarball"
-tar_args=( -czf "$OUTPUT" -C . .env )
-[[ -f .envrc ]] && tar_args+=( .envrc )
-tar_args+=( config -C "$TMPDIR_BACKUP" BACKUP-MANIFEST )
-tar "${tar_args[@]}"
+  # Pull a version string if we can — prefer .version (release installs),
+  # fall back to MANIFEST line 1, fall back to "unknown".
+  backup_version="unknown"
+  if [[ -f .version ]]; then
+    backup_version=$(cat .version)
+  elif [[ -f MANIFEST ]]; then
+    backup_version=$(parse_manifest_version MANIFEST 2>/dev/null || echo "unknown")
+  fi
 
-chmod 600 "$OUTPUT"
-size=$(du -h "$OUTPUT" | awk '{print $1}')
-log_ok "tarball" "$OUTPUT ($size)"
+  {
+    echo "schema:        1"
+    echo "created:       $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    echo "source-host:   $HOSTNAME_SHORT"
+    echo "source-user:   $(id -un)"
+    echo "stack-version: $backup_version"
+    echo ""
+    echo "# Files captured (paths relative to the install dir at restore time)"
+    echo "file: .env"
+    if [[ -f .envrc ]]; then echo "file: .envrc"; fi
+    echo "tree: config/"
+  } > "$MANIFEST_FILE"
 
-# --- Done banner ---
-echo ""
-echo "${COLOR_BOLD}${COLOR_GREEN}backup complete.${COLOR_RESET}"
-echo "  restore on this machine:   $(pwd)/restore $OUTPUT"
-echo "  restore on a clean machine: curl -fsSL https://raw.githubusercontent.com/media-centaur/prowlarr-stack/main/install.sh | sh -s -- --restore $OUTPUT"
-echo ""
-echo "  ${COLOR_YELLOW}!${COLOR_RESET} this file contains your WireGuard private key + qBittorrent password."
-echo "    keep it off any public repo, public cloud, or shared system."
+  # --- Build tarball ---
+  log_phase "creating tarball"
+  tar_args=( -czf "$OUTPUT" -C . .env )
+  [[ -f .envrc ]] && tar_args+=( .envrc )
+  tar_args+=( config -C "$TMPDIR_BACKUP" BACKUP-MANIFEST )
+  tar "${tar_args[@]}"
+
+  chmod 600 "$OUTPUT"
+  size=$(du -h "$OUTPUT" | awk '{print $1}')
+  log_ok "tarball" "$OUTPUT ($size)"
+
+  # --- Done banner ---
+  echo ""
+  echo "${COLOR_BOLD}${COLOR_GREEN}backup complete.${COLOR_RESET}"
+  echo "  restore on this machine:   $(pwd)/restore $OUTPUT"
+  echo "  restore on a clean machine: curl -fsSL https://raw.githubusercontent.com/media-centaur/prowlarr-stack/main/install.sh | sh -s -- --restore $OUTPUT"
+  echo ""
+  echo "  ${COLOR_YELLOW}!${COLOR_RESET} this file contains your WireGuard private key + qBittorrent password."
+  echo "    keep it off any public repo, public cloud, or shared system."
+fi

@@ -1,0 +1,370 @@
+#!/usr/bin/env bash
+set -u
+
+# Tests are run from the repo root by ./scripts/test, so paths are relative to
+# the repo, not this file.
+REPO_ROOT=$(pwd)
+
+# The real ./restore under test calls `systemctl --user ... prowlarr-stack`
+# unconditionally (even for --settings-only — see restore's comment on why:
+# the importer writes prowlarr.db read-write, so a running Prowlarr holding
+# the same file is a real consistency risk). Stub systemctl on PATH so that's
+# inert in tests, same idiom as tests/restore.test. Sourced once per test
+# function by the runner, so this applies to each.
+_STUB_BIN=$(mktemp -d)
+cat > "$_STUB_BIN/systemctl" <<'STUB'
+#!/usr/bin/env bash
+case " $* " in *" is-active "*) exit 3 ;; esac
+exit 0
+STUB
+chmod +x "$_STUB_BIN/systemctl"
+export PATH="$_STUB_BIN:$PATH"
+trap 'rm -rf "$_STUB_BIN"' EXIT
+
+SCHEMA_SQL='CREATE TABLE Tags (Id INTEGER PRIMARY KEY AUTOINCREMENT, Label TEXT NOT NULL);
+CREATE TABLE Indexers ("Id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "Name" TEXT NOT NULL, "Implementation" TEXT NOT NULL, "Settings" TEXT, "ConfigContract" TEXT, "Enable" INTEGER, "Priority" INTEGER NOT NULL, "Added" DATETIME NOT NULL, "Redirect" INTEGER NOT NULL, "AppProfileId" INTEGER NOT NULL, "Tags" TEXT, "DownloadClientId" INTEGER NOT NULL);'
+
+# _make_settings_install <dir> [setup_marker_path]
+# Extends the fixture idiom in tests/backup.test / tests/restore.test
+# (docker-compose.yml, setup, scripts/lib/common, ./backup, ./restore) with
+# what --settings-only additionally needs: scripts/settings-bundle, and a
+# REAL SQLite config/prowlarr/prowlarr.db with Tags/Indexers tables — the
+# existing fixture writes a text marker there, which is fine for a full
+# backup's opaque tar but not for an export that queries it. .env and
+# config/sabnzbd/sabnzbd.ini are seeded separately per test (source vs.
+# fresh-target content differs).
+_make_settings_install() {
+  local dir="$1"
+  local marker="${2:-$dir/.setup-was-called}"
+  mkdir -p "$dir/scripts/lib" "$dir/config/prowlarr" "$dir/config/sabnzbd"
+  cp "$REPO_ROOT/scripts/lib/common" "$dir/scripts/lib/common"
+  cp "$REPO_ROOT/scripts/settings-bundle" "$dir/scripts/settings-bundle"
+  cp "$REPO_ROOT/backup" "$dir/backup"
+  cp "$REPO_ROOT/restore" "$dir/restore"
+  chmod +x "$dir/backup" "$dir/restore" "$dir/scripts/settings-bundle"
+  echo "services: {}" > "$dir/docker-compose.yml"
+  cat > "$dir/setup" <<EOF
+#!/usr/bin/env bash
+# Test stub: writes a marker so tests can assert restore called us with the
+# expected args, then exits 0. Real setup would re-detect LAN, re-patch
+# prowlarr.db, etc. — and start containers, which tests must never do.
+echo "called with args: \$*" > "$marker"
+exit 0
+EOF
+  chmod +x "$dir/setup"
+  echo "v0.0.0-test" > "$dir/.version"
+  sqlite3 "$dir/config/prowlarr/prowlarr.db" "$SCHEMA_SQL"
+}
+
+# --- Source install: user-supplied values, plus secrets that must NOT travel ---
+_seed_source_env() {
+  cat > "$1/.env" <<'EOF'
+DOWNLOADS_DIR=/mnt/videos/downloads
+COMPLETED_DIR=/mnt/videos/completed
+USENET_SERVER_HOST=news.example.net
+USENET_SERVER_USERNAME=someuser
+USENET_SERVER_PASSWORD=somepass
+VPN_SERVICE_PROVIDER=nordvpn
+WIREGUARD_PRIVATE_KEY=SECRETKEYSECRETKEYSECRETKEYSECRETKEYSECRET=
+HOST_LAN_IP=192.168.1.10
+LAN_SUBNET=192.168.1.0/24
+SABNZBD_API_KEY=generated0000
+QBITTORRENT_PASSWORD=hunter2
+COMPOSE_PROFILES=vpn
+EOF
+  chmod 600 "$1/.env"
+}
+
+_seed_source_db() {
+  local db="$1/config/prowlarr/prowlarr.db"
+  sqlite3 "$db" "INSERT INTO Tags (Id,Label) VALUES (7,'byparr');"
+  sqlite3 "$db" "INSERT INTO Indexers (Name,Implementation,Settings,ConfigContract,Enable,Priority,Added,Redirect,AppProfileId,Tags,DownloadClientId) VALUES ('NZBgeek','Newznab','{\"apiKey\":\"indexerkey\"}','NewznabSettings',1,25,'2026-01-01',0,1,'[7]',0);"
+}
+
+_seed_source_sab() {
+  cat > "$1/config/sabnzbd/sabnzbd.ini" <<'EOF'
+[misc]
+api_key = generated0000
+pre_check = 1
+[categories]
+[[movies]]
+priority = -100
+EOF
+}
+
+# --- Target install: a FRESH install ./setup has already configured ---
+_seed_target_env() {
+  cat > "$1/.env" <<'EOF'
+DOWNLOADS_DIR=/tmp/wrong
+COMPLETED_DIR=/tmp/wrong
+SABNZBD_API_KEY=freshkey1234
+HOST_LAN_IP=10.0.0.5
+COMPOSE_PROFILES=
+EOF
+  chmod 600 "$1/.env"
+}
+
+_seed_target_db() {
+  local db="$1/config/prowlarr/prowlarr.db"
+  # Deliberately a DIFFERENT tag id than the source install's byparr=7.
+  sqlite3 "$db" "INSERT INTO Tags (Id,Label) VALUES (3,'byparr');"
+}
+
+_seed_target_sab() {
+  printf '[misc]\napi_key = freshkey1234\n[categories]\n[[*]]\n' > "$1/config/sabnzbd/sabnzbd.ini"
+}
+
+# _make_bundle_tarball <out_tar_gz>
+# A hand-built settings bundle, independent of ./backup, so import-side tests
+# don't depend on export having worked.
+_make_bundle_tarball() {
+  local out="$1"
+  local b; b=$(mktemp -d)
+  printf 'DOWNLOADS_DIR=/mnt/videos/downloads\nUSENET_SERVER_HOST=news.example.net\n' > "$b/env.subset"
+  cat > "$b/indexers.json" <<'JSON'
+[{"Name":"NZBgeek","Implementation":"Newznab","Settings":"{\"apiKey\":\"indexerkey\"}","ConfigContract":"NewznabSettings","Enable":1,"Priority":25,"Redirect":0,"TagLabels":[]}]
+JSON
+  printf '[misc]\npre_check = 1\n[categories]\n[[movies]]\npriority = -100\n' > "$b/sabnzbd.subset.ini"
+  printf '{"format":1,"stack_version":"v1.2.1","indexer_count":1}\n' > "$b/SETTINGS-MANIFEST"
+  tar -czf "$out" -C "$b" SETTINGS-MANIFEST env.subset indexers.json sabnzbd.subset.ini
+  rm -rf "$b"
+}
+
+# _make_full_backup_tarball <out_tar_gz>
+# A well-formed FULL backup tarball (has BACKUP-MANIFEST, no SETTINGS-MANIFEST) —
+# used to prove --settings-only refuses the wrong kind of tarball.
+_make_full_backup_tarball() {
+  local out="$1"
+  local stage; stage=$(mktemp -d)
+  echo "x" > "$stage/.env"
+  mkdir -p "$stage/config"
+  echo "schema: 1" > "$stage/BACKUP-MANIFEST"
+  tar -czf "$out" -C "$stage" .env config BACKUP-MANIFEST
+  rm -rf "$stage"
+}
+
+# ============================================================
+# ./backup --settings-only
+# ============================================================
+
+test_backup_settings_only_produces_four_member_tarball_without_prowlarr_db() {
+  local tmp; tmp=$(mktemp -d)
+  _make_settings_install "$tmp/install"
+  _seed_source_env "$tmp/install"
+  _seed_source_db "$tmp/install"
+  _seed_source_sab "$tmp/install"
+  local out="$tmp/out.tar.gz"
+  ( cd "$tmp/install" && ./backup --settings-only --yes --output "$out" >/dev/null )
+  [[ -f "$out" ]]
+  local listing; listing=$(tar tzf "$out")
+  echo "$listing" | grep -qx 'SETTINGS-MANIFEST'
+  echo "$listing" | grep -qx 'env.subset'
+  echo "$listing" | grep -qx 'indexers.json'
+  echo "$listing" | grep -qx 'sabnzbd.subset.ini'
+  # The assertion that proves this is a subset, not a full backup under a new name.
+  if echo "$listing" | grep -q 'prowlarr.db'; then return 1; fi
+  rm -rf "$tmp"
+}
+
+test_backup_settings_only_writes_chmod_600_output() {
+  local tmp; tmp=$(mktemp -d)
+  _make_settings_install "$tmp/install"
+  _seed_source_env "$tmp/install"
+  _seed_source_db "$tmp/install"
+  _seed_source_sab "$tmp/install"
+  local out="$tmp/out.tar.gz"
+  ( cd "$tmp/install" && ./backup --settings-only --yes --output "$out" >/dev/null )
+  local mode; mode=$(stat -c '%a' "$out")
+  [[ "$mode" == "600" ]]
+  rm -rf "$tmp"
+}
+
+test_backup_settings_only_names_output_with_settings_prefix() {
+  local tmp; tmp=$(mktemp -d)
+  _make_settings_install "$tmp/install"
+  _seed_source_env "$tmp/install"
+  _seed_source_db "$tmp/install"
+  _seed_source_sab "$tmp/install"
+  local outdir="$tmp/out"; mkdir -p "$outdir"
+  ( cd "$tmp/install" && HOME="$outdir" ./backup --settings-only --yes >/dev/null )
+  ls "$outdir"/prowlarr-stack-settings-*.tar.gz >/dev/null
+  rm -rf "$tmp"
+}
+
+# The git/jj guard exists to stop the tarball landing in a repo; it must fire
+# on the settings-only path too — a settings bundle still holds a usenet
+# password and indexer API keys, so leaking it is just as bad.
+test_backup_settings_only_refuses_to_write_into_git_repo() {
+  local tmp; tmp=$(mktemp -d)
+  _make_settings_install "$tmp/install"
+  _seed_source_env "$tmp/install"
+  _seed_source_db "$tmp/install"
+  _seed_source_sab "$tmp/install"
+  local repo="$tmp/protected"
+  mkdir -p "$repo/.git"
+  if ( cd "$tmp/install" && ./backup --settings-only --yes --output "$repo/leak.tar.gz" 2>/dev/null ); then return 1; fi
+  [[ ! -e "$repo/leak.tar.gz" ]]
+  rm -rf "$tmp"
+}
+
+test_backup_settings_only_refuses_to_write_into_jj_repo() {
+  local tmp; tmp=$(mktemp -d)
+  _make_settings_install "$tmp/install"
+  _seed_source_env "$tmp/install"
+  _seed_source_db "$tmp/install"
+  _seed_source_sab "$tmp/install"
+  local repo="$tmp/protected"
+  mkdir -p "$repo/.jj"
+  if ( cd "$tmp/install" && ./backup --settings-only --yes --output "$repo/leak.tar.gz" 2>/dev/null ); then return 1; fi
+  [[ ! -e "$repo/leak.tar.gz" ]]
+  rm -rf "$tmp"
+}
+
+test_backup_help_mentions_settings_only() {
+  local tmp; tmp=$(mktemp -d)
+  _make_settings_install "$tmp/install"
+  local out; out=$( cd "$tmp/install" && ./backup --help )
+  echo "$out" | grep -q -- '--settings-only'
+  rm -rf "$tmp"
+}
+
+# ============================================================
+# ./restore --settings-only
+# ============================================================
+
+test_restore_settings_only_merges_into_fresh_install() {
+  local tmp; tmp=$(mktemp -d)
+  _make_settings_install "$tmp/install" "$tmp/install/.setup-was-called"
+  _seed_target_env "$tmp/install"
+  _seed_target_db "$tmp/install"
+  _seed_target_sab "$tmp/install"
+  local bundle="$tmp/bundle.tar.gz"
+  _make_bundle_tarball "$bundle"
+
+  ( cd "$tmp/install" && ./restore --settings-only "$bundle" --yes >/dev/null 2>&1 )
+
+  source "$REPO_ROOT/scripts/lib/common"
+  local dl; dl=$(read_env_value "$tmp/install/.env" DOWNLOADS_DIR)
+  [[ "$dl" == "/mnt/videos/downloads" ]]
+  # setup-generated value must survive the merge untouched
+  local sabkey; sabkey=$(read_env_value "$tmp/install/.env" SABNZBD_API_KEY)
+  [[ "$sabkey" == "freshkey1234" ]]
+  [[ "$(sqlite3 "$tmp/install/config/prowlarr/prowlarr.db" "SELECT COUNT(*) FROM Indexers WHERE Name='NZBgeek';")" -eq 1 ]]
+  [[ -f "$tmp/install/.setup-was-called" ]]
+  grep -q -- '--non-interactive' "$tmp/install/.setup-was-called"
+  rm -rf "$tmp"
+}
+
+test_restore_settings_only_takes_no_pre_restore_snapshot() {
+  local tmp; tmp=$(mktemp -d)
+  _make_settings_install "$tmp/install"
+  _seed_target_env "$tmp/install"
+  _seed_target_db "$tmp/install"
+  _seed_target_sab "$tmp/install"
+  local bundle="$tmp/bundle.tar.gz"
+  _make_bundle_tarball "$bundle"
+
+  ( cd "$tmp/install" && ./restore --settings-only "$bundle" --yes >/dev/null 2>&1 )
+
+  if ls "$tmp/install"/.env.pre-restore-* >/dev/null 2>&1; then return 1; fi
+  if ls -d "$tmp/install"/config.pre-restore-*/ >/dev/null 2>&1; then return 1; fi
+  rm -rf "$tmp"
+}
+
+# Given --settings-only but a tarball that is NOT a settings bundle, refuse —
+# and name the alternative (plain restore, no flag).
+test_restore_settings_only_refuses_a_full_backup_tarball() {
+  local tmp; tmp=$(mktemp -d)
+  _make_settings_install "$tmp/install"
+  _seed_target_env "$tmp/install"
+  _seed_target_db "$tmp/install"
+  _seed_target_sab "$tmp/install"
+  local full="$tmp/full.tar.gz"
+  _make_full_backup_tarball "$full"
+
+  local out
+  if out=$( cd "$tmp/install" && ./restore --settings-only "$full" --yes 2>&1 ); then return 1; fi
+  echo "$out" | grep -qi 'SETTINGS-MANIFEST'
+  echo "$out" | grep -q -- '--settings-only'
+  rm -rf "$tmp"
+}
+
+# Given a settings bundle but NO --settings-only flag, refuse — and name the
+# flag that should have been used.
+test_restore_refuses_a_settings_bundle_without_the_flag() {
+  local tmp; tmp=$(mktemp -d)
+  _make_settings_install "$tmp/install"
+  _seed_target_env "$tmp/install"
+  _seed_target_db "$tmp/install"
+  _seed_target_sab "$tmp/install"
+  local bundle="$tmp/bundle.tar.gz"
+  _make_bundle_tarball "$bundle"
+
+  local out
+  if out=$( cd "$tmp/install" && ./restore "$bundle" --yes 2>&1 ); then return 1; fi
+  echo "$out" | grep -q -- '--settings-only'
+  rm -rf "$tmp"
+}
+
+test_restore_help_mentions_settings_only() {
+  local tmp; tmp=$(mktemp -d)
+  _make_settings_install "$tmp/install"
+  local out; out=$( cd "$tmp/install" && ./restore --help )
+  echo "$out" | grep -q -- '--settings-only'
+  rm -rf "$tmp"
+}
+
+# ============================================================
+# End-to-end: ./backup --settings-only  →  ./restore --settings-only
+# ============================================================
+
+test_backup_then_restore_settings_only_end_to_end() {
+  local tmp; tmp=$(mktemp -d)
+
+  _make_settings_install "$tmp/source"
+  _seed_source_env "$tmp/source"
+  _seed_source_db "$tmp/source"
+  _seed_source_sab "$tmp/source"
+
+  _make_settings_install "$tmp/target" "$tmp/target/.setup-was-called"
+  _seed_target_env "$tmp/target"
+  _seed_target_db "$tmp/target"
+  _seed_target_sab "$tmp/target"
+
+  local bundle="$tmp/bundle.tar.gz"
+  ( cd "$tmp/source" && ./backup --settings-only --yes --output "$bundle" >/dev/null )
+
+  # Secrets and generated values never even reach the tarball.
+  local extracted; extracted=$(mktemp -d)
+  tar xzf "$bundle" -C "$extracted"
+  if grep -q 'WIREGUARD_PRIVATE_KEY' "$extracted/env.subset"; then return 1; fi
+  if grep -q 'SABNZBD_API_KEY' "$extracted/env.subset"; then return 1; fi
+  rm -rf "$extracted"
+
+  ( cd "$tmp/target" && ./restore --settings-only "$bundle" --yes >/dev/null 2>&1 )
+
+  source "$REPO_ROOT/scripts/lib/common"
+  # user-supplied values travelled
+  local dl usenetpass
+  dl=$(read_env_value "$tmp/target/.env" DOWNLOADS_DIR)
+  [[ "$dl" == "/mnt/videos/downloads" ]]
+  usenetpass=$(read_env_value "$tmp/target/.env" USENET_SERVER_PASSWORD)
+  [[ "$usenetpass" == "somepass" ]]
+  # the target's own setup-generated value survived the merge
+  local sabkey; sabkey=$(read_env_value "$tmp/target/.env" SABNZBD_API_KEY)
+  [[ "$sabkey" == "freshkey1234" ]]
+  if grep -q 'WIREGUARD_PRIVATE_KEY' "$tmp/target/.env"; then return 1; fi
+
+  # the indexer merged, with its tag remapped from source id 7 to target id 3
+  [[ "$(sqlite3 "$tmp/target/config/prowlarr/prowlarr.db" "SELECT COUNT(*) FROM Indexers WHERE Name='NZBgeek';")" -eq 1 ]]
+  local tags; tags=$(sqlite3 "$tmp/target/config/prowlarr/prowlarr.db" "SELECT Tags FROM Indexers WHERE Name='NZBgeek';")
+  echo "$tags" | grep -q '3'
+  if echo "$tags" | grep -q '7'; then return 1; fi
+
+  # no pre-restore snapshot, and setup was invoked non-interactively
+  if ls "$tmp/target"/.env.pre-restore-* >/dev/null 2>&1; then return 1; fi
+  [[ -f "$tmp/target/.setup-was-called" ]]
+  grep -q -- '--non-interactive' "$tmp/target/.setup-was-called"
+
+  rm -rf "$tmp"
+}
