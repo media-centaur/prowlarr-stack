@@ -358,7 +358,8 @@ fi
 
 # --- Phase 6b: SABnzbd (usenet) config + DB wiring ---
 # SABnzbd always runs direct (never in gluetun's netns); Prowlarr reaches it
-# over the compose bridge by service name (sabnzbd:8085). Provider credentials
+# over the compose bridge by service name (sabnzbd:8080 — the container port,
+# not the host-published 8085). Provider credentials
 # come from .env (empty until the user has a Usenet account); the API key is
 # generated once and shared into both SABnzbd's config and Prowlarr's
 # download-client row.
@@ -410,6 +411,11 @@ if [[ -f "$SAB_INI" ]]; then
   # these in the seeded ini; re-applying is idempotent). --category-pp 3
   # forces Repair+Unpack+Delete: a blank category `pp` (SABnzbd's own default)
   # only downloads and verifies, so archives never get unpacked.
+  # --whitelist-host: SABnzbd's DNS-rebinding guard refuses any Host header
+  # that is not localhost, an IP literal, or in [misc] host_whitelist, and
+  # Prowlarr addresses it as `sabnzbd` over the bridge. Re-applied every run
+  # because an install that predates the seeded entry carries only the
+  # container id SABnzbd auto-filled on first start.
   printf '%s' "$usenet_pass" | ./scripts/set-sab-config "$SAB_INI" \
     --api-key "$sab_api_key" \
     --server-host "$usenet_host" \
@@ -419,10 +425,11 @@ if [[ -f "$SAB_INI" ]]; then
     --complete-dir "/downloads/completed/.staging" \
     --script-dir "/config/scripts" \
     --category-script "move-finished.sh" \
-    --category-pp "3"
+    --category-pp "3" \
+    --whitelist-host "sabnzbd"
   # Holds the API key + plaintext news-server password — keep it owner-only.
   chmod 600 "$SAB_INI"
-  log_ok "$SAB_INI" "API key + news-server creds + staging layout written (mode 600)"
+  log_ok "$SAB_INI" "API key + news-server creds + staging layout + host whitelist written (mode 600)"
   if [[ -z "$usenet_host" ]]; then
     log_warn "USENET_SERVER_* is empty — SABnzbd starts but can't download until you fill .env and re-run ./setup"
   fi
@@ -437,8 +444,8 @@ if [[ -f config/prowlarr/prowlarr.db ]]; then
   # no row yet — materialize it here with the same idempotent migration (no-op
   # when the row is already present) so the patch below never hits an empty set.
   ./migrations/0003-add-sabnzbd-download-client . >/dev/null
-  printf '%s' "$sab_api_key" | ./scripts/patch-prowlarr-sab config/prowlarr/prowlarr.db "sabnzbd" 8085 -
-  log_ok "prowlarr.db" "SABnzbd download-client host = sabnzbd:8085, API key synced"
+  printf '%s' "$sab_api_key" | ./scripts/patch-prowlarr-sab config/prowlarr/prowlarr.db "sabnzbd" 8080 -
+  log_ok "prowlarr.db" "SABnzbd download-client host = sabnzbd:8080, API key synced"
 else
   log_warn "config/prowlarr/prowlarr.db not present — skipping SABnzbd DB patch"
 fi

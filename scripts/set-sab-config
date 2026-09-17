@@ -13,12 +13,16 @@ pre-staging installs converge on the seeded layout):
   --script-dir DIR        -> [misc] script_dir
   --category-script NAME  -> `script` key in every [[category]] subsection
   --category-pp PP        -> `pp` key in every [[category]] subsection
+  --whitelist-host NAME   -> ensure NAME is in [misc] host_whitelist, keeping
+                             the entries already there (an operator's LAN
+                             hostname, SABnzbd's auto-filled container id)
 
 SABnzbd's INI has nested sections: top-level [misc], [servers], and the
 double-bracketed [[server1]] subsection. configparser can't parse the double
 brackets, so this edits lines with a small section-aware state machine:
   * api_key, complete_dir,
     script_dir      -> set in [misc]
+  * host_whitelist  -> list in [misc]; --whitelist-host adds a member
   * host, port,
     username,
     password,
@@ -33,6 +37,16 @@ import re
 import sys
 
 
+def list_with(value: str, member: str) -> str:
+    """The configobj list `value` with `member` present. Serialized the way
+    SABnzbd itself writes lists: `a, b`, or `a,` for a single item (the
+    trailing comma is what makes configobj read one item as a list)."""
+    items = [x.strip() for x in value.split(",") if x.strip()]
+    if member.lower() not in (x.lower() for x in items):
+        items.append(member)
+    return ", ".join(items) + ("," if len(items) == 1 else "")
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("ini")
@@ -45,6 +59,7 @@ def main() -> int:
     p.add_argument("--script-dir")
     p.add_argument("--category-script")
     p.add_argument("--category-pp")
+    p.add_argument("--whitelist-host")
     a = p.parse_args()
 
     password = sys.stdin.read().rstrip("\n")
@@ -54,6 +69,9 @@ def main() -> int:
         misc["complete_dir"] = a.complete_dir
     if a.script_dir:
         misc["script_dir"] = a.script_dir
+    misc_lists = {}
+    if a.whitelist_host:
+        misc_lists["host_whitelist"] = a.whitelist_host
     category = {}
     if a.category_script:
         category["script"] = a.category_script
@@ -75,7 +93,7 @@ def main() -> int:
         return 1
 
     section = None
-    key_re = re.compile(r"^(\s*)([A-Za-z0-9_]+)(\s*=).*$")
+    key_re = re.compile(r"^(\s*)([A-Za-z0-9_]+)(\s*=)(.*)$")
     out = []
     for line in lines:
         stripped = line.strip()
@@ -94,6 +112,8 @@ def main() -> int:
                 repl = None
                 if section and section[0] == "misc-ish" and section[1] == "misc" and key in misc:
                     repl = misc[key]
+                elif section and section[0] == "misc-ish" and section[1] == "misc" and key in misc_lists:
+                    repl = list_with(m.group(4), misc_lists[key])
                 elif section and section[0] == "server" and key in server:
                     repl = server[key]
                 elif section and section[0] == "other" and key in category:

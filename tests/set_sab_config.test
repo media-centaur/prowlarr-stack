@@ -134,3 +134,61 @@ INI
   grep -qE '^script = Default$' "$f"
   rm -f "$f"
 }
+
+# --- --whitelist-host ---
+# SABnzbd refuses any request whose Host header is neither localhost, an IP
+# literal, nor in [misc] host_whitelist. Prowlarr addresses it as `sabnzbd`
+# over the compose bridge, so that name has to be in the list. The list may
+# also carry operator entries (a LAN hostname) and SABnzbd's own auto-filled
+# container id, so the flag is ensure-member, not overwrite.
+
+_make_whitelist_ini() {
+  local f; f=$(mktemp --suffix=.ini)
+  cat > "$f" <<INI
+[misc]
+api_key =
+host_whitelist = $1
+[servers]
+[[server1]]
+host =
+port = 563
+username =
+password =
+connections = 20
+INI
+  echo "$f"
+}
+
+_run_whitelist() {
+  printf 'pw' | "$SCRIPT" "$1" --api-key K --server-host h --server-port 563 --server-user u --connections 20 --whitelist-host sabnzbd
+}
+
+test_whitelist_host_fills_an_empty_whitelist() {
+  local f; f=$(_make_whitelist_ini "")
+  _run_whitelist "$f"
+  # configobj's single-element list form (trailing comma), as SABnzbd writes it.
+  grep -qE '^host_whitelist = sabnzbd,$' "$f"
+  rm -f "$f"
+}
+
+test_whitelist_host_keeps_existing_entries() {
+  local f; f=$(_make_whitelist_ini "f4eb57f4e3f4,")
+  _run_whitelist "$f"
+  grep -qE '^host_whitelist = f4eb57f4e3f4, sabnzbd$' "$f"
+  rm -f "$f"
+}
+
+test_whitelist_host_is_idempotent() {
+  local f; f=$(_make_whitelist_ini "nas.home, sabnzbd")
+  _run_whitelist "$f"
+  _run_whitelist "$f"
+  grep -qE '^host_whitelist = nas.home, sabnzbd$' "$f"
+  rm -f "$f"
+}
+
+test_whitelist_is_untouched_without_the_flag() {
+  local f; f=$(_make_whitelist_ini "f4eb57f4e3f4,")
+  printf 'pw' | "$SCRIPT" "$f" --api-key K --server-host h --server-port 563 --server-user u --connections 20
+  grep -qE '^host_whitelist = f4eb57f4e3f4,$' "$f"
+  rm -f "$f"
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 0003-add-sabnzbd-download-client — ensure a SABnzbd download-client row exists
 # in the Prowlarr DB so usenet grabs have somewhere to go. The row ships with
-# placeholder host/port/apiKey; ./setup patches them (host=LAN IP, port=8085,
+# placeholder host/port/apiKey; ./setup patches them (host=sabnzbd, port=8080,
 # generated API key). Idempotent: no-op if a Sabnzbd row already exists or the
 # DB is absent.
 #

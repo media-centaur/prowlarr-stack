@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Regression guard: Prowlarr reaches SABnzbd over the compose bridge, so it must
+# use the port SABnzbd listens on INSIDE its container — not the host-published
+# one — and SABnzbd must accept requests addressed to the compose service name.
+# v1.3.0 wrote sabnzbd:8085 (the published port) into Prowlarr's row while the
+# container listened on 8080, and left the service name out of SABnzbd's
+# hostname whitelist; every usenet grab failed. This pins the three files that
+# have to agree: docker-compose.yml, the seed ini, and ./setup.
+set -u
+
+COMPOSE="${COMPOSE:-docker-compose.yml}"
+SEED_INI="${SEED_INI:-defaults/sabnzbd/sabnzbd.ini}"
+SETUP="${SETUP:-setup}"
+
+_compose_target_port() {
+  docker compose -f "$COMPOSE" config --format json 2>/dev/null \
+    | jq -r '.services.sabnzbd.ports[0].target'
+}
+
+_seed_ini_port() {
+  sed -nE '/^\[misc\]/,/^\[/{s/^port *= *([0-9]+).*/\1/p}' "$SEED_INI" | head -1
+}
+
+# "<host> <port>" as ./setup passes them to patch-prowlarr-sab.
+_setup_patch_target() {
+  sed -nE 's/.*patch-prowlarr-sab config\/prowlarr\/prowlarr\.db "([^"]+)" ([0-9]+).*/\1 \2/p' "$SETUP" | head -1
+}
+
+_seed_ini_whitelist() {
+  sed -nE 's/^host_whitelist *= *//p' "$SEED_INI" | head -1 | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$'
+}
+
+test_setup_addresses_sabnzbd_by_service_name() {
+  [[ "$(_setup_patch_target | cut -d' ' -f1)" == "sabnzbd" ]]
+}
+
+test_setup_uses_the_container_port_not_the_published_one() {
+  local target; target=$(_compose_target_port)
+  [[ "$target" =~ ^[0-9]+$ ]]
+  [[ "$(_setup_patch_target | cut -d' ' -f2)" == "$target" ]]
+}
+
+test_seed_ini_listens_on_the_container_port() {
+  [[ "$(_seed_ini_port)" == "$(_compose_target_port)" ]]
+}
+
+test_seed_ini_whitelists_the_service_name() {
+  _seed_ini_whitelist | grep -qx sabnzbd
+}
+
+test_setup_whitelists_the_service_name_on_every_run() {
+  # Existing installs carry SABnzbd's auto-filled whitelist (a stale container
+  # id), so the seed alone is not enough — setup must re-apply it.
+  grep -qE -- '--whitelist-host +"?sabnzbd"?' "$SETUP"
+}
