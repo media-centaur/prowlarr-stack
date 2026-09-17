@@ -134,6 +134,116 @@ def export_sab(ini: Path) -> str:
     return "\n".join(out) + ("\n" if out else "")
 
 
+# --- import ---
+
+def set_env_value(path: Path, key: str, value: str) -> None:
+    """Set one key, preserving every other line. Mirrors write_env_value."""
+    quoted = value
+    if value == "" or any(c in value for c in ' \t"\'$\\'):
+        quoted = '"' + value.replace('"', '\\"') + '"'
+    lines = path.read_text().splitlines() if path.is_file() else []
+    for i, line in enumerate(lines):
+        if line.split("=", 1)[0].strip() == key:
+            lines[i] = f"{key}={quoted}"
+            break
+    else:
+        lines.append(f"{key}={quoted}")
+    path.write_text("\n".join(lines) + "\n")
+    path.chmod(0o600)
+
+
+def resolve_tag_ids(con: sqlite3.Connection, labels: list[str]) -> list[int]:
+    """Map labels to ids in THIS database, creating any that are missing."""
+    ids = []
+    for label in labels:
+        row = con.execute("SELECT Id FROM Tags WHERE Label = ?", (label,)).fetchone()
+        if row is None:
+            cur = con.execute("INSERT INTO Tags (Label) VALUES (?)", (label,))
+            ids.append(cur.lastrowid)
+        else:
+            ids.append(row[0])
+    return ids
+
+
+def import_indexers(db: Path, rows: list[dict]) -> int:
+    """Upsert by Name. Ids, AppProfileId and DownloadClientId stay the target's."""
+    if not db.is_file() or not rows:
+        return 0
+    con = sqlite3.connect(db)
+    try:
+        n = 0
+        for row in rows:
+            tags = json.dumps(resolve_tag_ids(con, row.get("TagLabels", [])))
+            existing = con.execute(
+                "SELECT Id FROM Indexers WHERE Name = ?", (row["Name"],)
+            ).fetchone()
+            if existing:
+                con.execute(
+                    "UPDATE Indexers SET Implementation=?, Settings=?, ConfigContract=?,"
+                    " Enable=?, Priority=?, Redirect=?, Tags=? WHERE Id=?",
+                    (row["Implementation"], row["Settings"], row["ConfigContract"],
+                     row["Enable"], row["Priority"], row["Redirect"], tags, existing[0]),
+                )
+            else:
+                con.execute(
+                    "INSERT INTO Indexers (Name, Implementation, Settings, ConfigContract,"
+                    " Enable, Priority, Added, Redirect, AppProfileId, Tags, DownloadClientId)"
+                    " VALUES (?,?,?,?,?,?,datetime('now'),?,1,?,0)",
+                    (row["Name"], row["Implementation"], row["Settings"],
+                     row["ConfigContract"], row["Enable"], row["Priority"],
+                     row["Redirect"], tags),
+                )
+            n += 1
+        con.commit()
+        return n
+    finally:
+        con.close()
+
+
+def import_sab(ini: Path, subset: str) -> None:
+    """Replace [categories] wholesale and set the listed [misc] keys in place."""
+    if not ini.is_file() or not subset.strip():
+        return
+    new_misc, new_cats = {}, []
+    for top, line in _sab_sections(subset):
+        stripped = line.strip()
+        if top == "misc" and "=" in stripped:
+            k, _, v = stripped.partition("=")
+            new_misc[k.strip()] = v.strip()
+        elif top == "categories" and not stripped.startswith("[categories]"):
+            new_cats.append(line)
+
+    out, in_cats, seen = [], False, set()
+    for top, line in _sab_sections(ini.read_text()):
+        stripped = line.strip()
+        if stripped == "[categories]":
+            in_cats = True
+            out.append(line)
+            out.extend(new_cats)
+            continue
+        if in_cats:
+            # Skip the old categories body; stop at the next top-level section.
+            if stripped.startswith("[") and not stripped.startswith("[["):
+                in_cats = False
+            else:
+                continue
+        if top == "misc" and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in new_misc:
+                out.append(f"{key} = {new_misc[key]}")
+                seen.add(key)
+                continue
+        out.append(line)
+    # Any tuned key the target did not already have.
+    for k, v in new_misc.items():
+        if k not in seen:
+            for i, line in enumerate(out):
+                if line.strip() == "[misc]":
+                    out.insert(i + 1, f"{k} = {v}")
+                    break
+    ini.write_text("\n".join(out) + "\n")
+
+
 # --- commands ---
 
 def cmd_export(install: Path, out: Path) -> None:
@@ -166,15 +276,47 @@ def cmd_export(install: Path, out: Path) -> None:
     print(f"exported {len(indexers)} indexer(s) and {len(lines)} setting(s)")
 
 
+def cmd_import(bundle: Path, install: Path) -> None:
+    manifest_path = bundle / "SETTINGS-MANIFEST"
+    if not manifest_path.is_file():
+        die(f"no SETTINGS-MANIFEST in {bundle} — not a settings bundle")
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("format") != BUNDLE_FORMAT:
+        die(f"bundle format {manifest.get('format')} is not supported "
+            f"(this build understands {BUNDLE_FORMAT})")
+
+    env_path = install / ".env"
+    if not env_path.is_file():
+        die(f"no .env in {install} — run ./setup before importing settings")
+
+    for key, value in read_env(bundle / "env.subset").items():
+        if key in ENV_KEYS:
+            set_env_value(env_path, key, value)
+
+    rows = json.loads((bundle / "indexers.json").read_text()) if (bundle / "indexers.json").is_file() else []
+    n = import_indexers(install / "config/prowlarr/prowlarr.db", rows)
+
+    sab = bundle / "sabnzbd.subset.ini"
+    if sab.is_file():
+        import_sab(install / "config/sabnzbd/sabnzbd.ini", sab.read_text())
+
+    print(f"imported {n} indexer(s); run ./setup --non-interactive to rewire")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="settings-bundle")
     sub = ap.add_subparsers(dest="cmd", required=True)
     e = sub.add_parser("export")
     e.add_argument("install")
     e.add_argument("out")
+    i = sub.add_parser("import")
+    i.add_argument("bundle")
+    i.add_argument("install")
     args = ap.parse_args()
     if args.cmd == "export":
         cmd_export(Path(args.install), Path(args.out))
+    elif args.cmd == "import":
+        cmd_import(Path(args.bundle), Path(args.install))
 
 
 if __name__ == "__main__":

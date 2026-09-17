@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -u
+
+# A FRESH install: different tag ids, no indexers, setup-generated values present.
+_fresh_install() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/config/prowlarr" "$root/config/sabnzbd"
+  cat > "$root/.env" <<'ENV'
+DOWNLOADS_DIR=/tmp/wrong
+COMPLETED_DIR=/tmp/wrong
+SABNZBD_API_KEY=freshkey1234
+HOST_LAN_IP=10.0.0.5
+COMPOSE_PROFILES=
+ENV
+  local db="$root/config/prowlarr/prowlarr.db"
+  sqlite3 "$db" 'CREATE TABLE Tags (Id INTEGER PRIMARY KEY AUTOINCREMENT, Label TEXT NOT NULL);'
+  sqlite3 "$db" 'CREATE TABLE Indexers ("Id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "Name" TEXT NOT NULL, "Implementation" TEXT NOT NULL, "Settings" TEXT, "ConfigContract" TEXT, "Enable" INTEGER, "Priority" INTEGER NOT NULL, "Added" DATETIME NOT NULL, "Redirect" INTEGER NOT NULL, "AppProfileId" INTEGER NOT NULL, "Tags" TEXT, "DownloadClientId" INTEGER NOT NULL);'
+  # Deliberately a DIFFERENT id than the source install's byparr=7.
+  sqlite3 "$db" "INSERT INTO Tags (Id,Label) VALUES (2,'byparr');"
+  printf '[misc]\napi_key = freshkey1234\n[categories]\n[[*]]\n' > "$root/config/sabnzbd/sabnzbd.ini"
+  echo "$root"
+}
+
+_bundle() {  # a bundle referencing tag label "byparr" and a new label "vpn"
+  local b; b=$(mktemp -d)
+  printf 'DOWNLOADS_DIR=/mnt/videos/downloads\nUSENET_SERVER_HOST=news.example.net\n' > "$b/env.subset"
+  cat > "$b/indexers.json" <<'JSON'
+[{"Name":"NZBgeek","Implementation":"Newznab","Settings":"{\"apiKey\":\"indexerkey\"}","ConfigContract":"NewznabSettings","Enable":1,"Priority":25,"Redirect":0,"TagLabels":[]},
+ {"Name":"Sample Tracker","Implementation":"Cardigann","Settings":"{\"definitionFile\":\"sample\"}","ConfigContract":"CardigannSettings","Enable":1,"Priority":25,"Redirect":0,"TagLabels":["byparr","vpn"]}]
+JSON
+  printf '[misc]\npre_check = 1\n[categories]\n[[movies]]\npriority = -100\n' > "$b/sabnzbd.subset.ini"
+  printf '{"format":1,"stack_version":"v1.2.1","indexer_count":2}\n' > "$b/SETTINGS-MANIFEST"
+  echo "$b"
+}
+
+_q() { sqlite3 "$1/config/prowlarr/prowlarr.db" "$2"; }
+
+test_import_sets_user_env_and_leaves_generated_alone() {
+  local inst; inst=$(_fresh_install); local b; b=$(_bundle)
+  scripts/settings-bundle import "$b" "$inst" >/dev/null
+  grep -q '^DOWNLOADS_DIR=/mnt/videos/downloads$' "$inst/.env"
+  grep -q '^USENET_SERVER_HOST=news.example.net$' "$inst/.env"
+  # setup-generated values must survive untouched
+  grep -q '^SABNZBD_API_KEY=freshkey1234$' "$inst/.env"
+  grep -q '^HOST_LAN_IP=10.0.0.5$' "$inst/.env"
+  rm -rf "$inst" "$b"
+}
+
+test_import_remaps_tag_labels_to_target_ids() {
+  local inst; inst=$(_fresh_install); local b; b=$(_bundle)
+  scripts/settings-bundle import "$b" "$inst" >/dev/null
+  # byparr is id 2 here, not 7 as in the source install.
+  local tags; tags=$(_q "$inst" "SELECT Tags FROM Indexers WHERE Name='Sample Tracker';")
+  python3 -c "
+import json,sys
+ids=json.loads('''$tags''')
+assert 2 in ids, ids            # existing byparr id, remapped
+assert len(ids)==2, ids         # plus the newly-created vpn tag
+"
+  rm -rf "$inst" "$b"
+}
+
+test_import_creates_missing_tags() {
+  local inst; inst=$(_fresh_install); local b; b=$(_bundle)
+  scripts/settings-bundle import "$b" "$inst" >/dev/null
+  [[ "$(_q "$inst" "SELECT COUNT(*) FROM Tags WHERE Label='vpn';")" -eq 1 ]]
+  rm -rf "$inst" "$b"
+}
+
+test_import_upserts_by_name_rather_than_duplicating() {
+  local inst; inst=$(_fresh_install); local b; b=$(_bundle)
+  _q "$inst" "INSERT INTO Indexers (Name,Implementation,Settings,ConfigContract,Enable,Priority,Added,Redirect,AppProfileId,Tags,DownloadClientId) VALUES ('NZBgeek','Newznab','{\"apiKey\":\"stale\"}','NewznabSettings',0,25,'2026-01-01',0,1,'[]',0);"
+  scripts/settings-bundle import "$b" "$inst" >/dev/null
+  [[ "$(_q "$inst" "SELECT COUNT(*) FROM Indexers WHERE Name='NZBgeek';")" -eq 1 ]]
+  # and it was updated, not left stale
+  [[ "$(_q "$inst" "SELECT Settings FROM Indexers WHERE Name='NZBgeek';")" == *indexerkey* ]]
+  rm -rf "$inst" "$b"
+}
+
+test_import_is_idempotent() {
+  local inst; inst=$(_fresh_install); local b; b=$(_bundle)
+  scripts/settings-bundle import "$b" "$inst" >/dev/null
+  scripts/settings-bundle import "$b" "$inst" >/dev/null
+  [[ "$(_q "$inst" "SELECT COUNT(*) FROM Indexers;")" -eq 2 ]]
+  [[ "$(_q "$inst" "SELECT COUNT(*) FROM Tags WHERE Label='vpn';")" -eq 1 ]]
+  rm -rf "$inst" "$b"
+}
+
+test_import_merges_sab_categories() {
+  local inst; inst=$(_fresh_install); local b; b=$(_bundle)
+  scripts/settings-bundle import "$b" "$inst" >/dev/null
+  grep -q 'movies' "$inst/config/sabnzbd/sabnzbd.ini"
+  # the generated api_key must survive the merge
+  grep -q 'freshkey1234' "$inst/config/sabnzbd/sabnzbd.ini"
+  rm -rf "$inst" "$b"
+}
+
+test_import_rejects_an_unknown_bundle_format() {
+  local inst; inst=$(_fresh_install); local b; b=$(_bundle)
+  printf '{"format":99}\n' > "$b/SETTINGS-MANIFEST"
+  refute scripts/settings-bundle import "$b" "$inst" >/dev/null 2>&1
+  rm -rf "$inst" "$b"
+}
+
+test_import_refuses_an_install_that_was_never_set_up() {
+  local root; root=$(mktemp -d); local b; b=$(_bundle)
+  refute scripts/settings-bundle import "$b" "$root" >/dev/null 2>&1
+  rm -rf "$root" "$b"
+}
