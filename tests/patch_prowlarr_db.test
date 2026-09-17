@@ -80,3 +80,63 @@ test_patcher_leaves_password_alone_when_omitted() {
   [[ "$before" == "$after" ]]
   rm -f "$tmp"
 }
+
+# --- vpn tag + Http indexer proxy ---
+#
+# The patcher checks vpn_profile_active(), which reads COMPOSE_PROFILES from
+# `.env` in the current directory (the same file `setup` writes it into, from
+# the install root it always runs in). These tests run the patcher from a
+# throwaway directory holding both the db and its own `.env`, so they're
+# independent of any `.env` sitting in the repo root.
+_run_patcher() {
+  local dir="$1"; shift
+  local script_abs; script_abs=$(cd "$(dirname "$SCRIPT")" && pwd)/$(basename "$SCRIPT")
+  (cd "$dir" && "$script_abs" "$@")
+}
+
+test_seeds_vpn_tag_and_http_proxy_under_profile() {
+  local dir; dir=$(mktemp -d)
+  cp "$FIXTURE" "$dir/prowlarr.db"
+  echo "COMPOSE_PROFILES=vpn" > "$dir/.env"
+  _run_patcher "$dir" prowlarr.db "192.168.1.10" "8080"
+  local db="$dir/prowlarr.db"
+  [[ "$(sqlite3 "$db" "SELECT COUNT(*) FROM Tags WHERE Label='vpn';")" -eq 1 ]]
+  [[ "$(sqlite3 "$db" "SELECT COUNT(*) FROM IndexerProxies WHERE Implementation='Http';")" -eq 1 ]]
+  rm -rf "$dir"
+}
+
+test_does_not_seed_proxy_without_profile() {
+  local dir; dir=$(mktemp -d)
+  cp "$FIXTURE" "$dir/prowlarr.db"
+  # No .env at all — mirrors a non-VPN install, which never writes COMPOSE_PROFILES.
+  _run_patcher "$dir" prowlarr.db "192.168.1.10" "8080"
+  [[ "$(sqlite3 "$dir/prowlarr.db" "SELECT COUNT(*) FROM IndexerProxies WHERE Implementation='Http';")" -eq 0 ]]
+  rm -rf "$dir"
+}
+
+test_vpn_proxy_seeding_is_idempotent() {
+  local dir; dir=$(mktemp -d)
+  cp "$FIXTURE" "$dir/prowlarr.db"
+  echo "COMPOSE_PROFILES=vpn" > "$dir/.env"
+  _run_patcher "$dir" prowlarr.db "192.168.1.10" "8080"
+  _run_patcher "$dir" prowlarr.db "192.168.1.10" "8080"
+  [[ "$(sqlite3 "$dir/prowlarr.db" "SELECT COUNT(*) FROM IndexerProxies WHERE Implementation='Http';")" -eq 1 ]]
+  [[ "$(sqlite3 "$dir/prowlarr.db" "SELECT COUNT(*) FROM Tags WHERE Label='vpn';")" -eq 1 ]]
+  rm -rf "$dir"
+}
+
+# --- FlareSolverr proxy re-point (always, regardless of the vpn profile) ---
+
+test_flaresolverr_proxy_repointed_to_gluetun_without_clobbering_settings() {
+  local dir; dir=$(mktemp -d)
+  cp "$FIXTURE" "$dir/prowlarr.db"
+  # No .env / no vpn profile — the FlareSolverr re-point must still happen.
+  _run_patcher "$dir" prowlarr.db "192.168.1.10" "8080"
+  local db="$dir/prowlarr.db"
+  local host timeout
+  host=$(sqlite3 "$db" "SELECT json_extract(Settings,'\$.host') FROM IndexerProxies WHERE Implementation='FlareSolverr';")
+  timeout=$(sqlite3 "$db" "SELECT json_extract(Settings,'\$.requestTimeout') FROM IndexerProxies WHERE Implementation='FlareSolverr';")
+  [[ "$host" == "http://gluetun:8191/" ]]
+  [[ "$timeout" == "60" ]]
+  rm -rf "$dir"
+}

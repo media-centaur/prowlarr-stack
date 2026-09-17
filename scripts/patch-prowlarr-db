@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Idempotently rewrite the qBittorrent download-client row in a Prowlarr DB.
+# Idempotently rewrite the qBittorrent download-client row in a Prowlarr DB,
+# seed the vpn tag + Http indexer proxy (when the vpn profile is active), and
+# re-point the FlareSolverr indexer proxy at gluetun.
 # Usage: patch-prowlarr-db <db_path> <host> <port> [password]
 #
 # When [password] is provided, it is also written into Settings.password so
@@ -70,3 +72,39 @@ if [[ -n "$password" ]]; then
     die "password patch did not take effect"
   fi
 fi
+
+# --- vpn tag + Http indexer proxy (only when the vpn compose profile is active) ---
+#
+# Prowlarr now runs on the bridge; only torrent indexers route through
+# gluetun's tunnel, via an Http indexer proxy at gluetun:8888 scoped by the
+# `vpn` tag. vpn_profile_active() reads COMPOSE_PROFILES from `.env` in the
+# current directory — the same file `setup` writes it into, and `setup`
+# always runs from the install root, so no path needs passing here.
+#
+# Keyed on Name='VPN' as well as Implementation='Http' so a user's own
+# unrelated Http-type proxy (if they'd set one up for something else) is
+# never adopted/overwritten — only the proxy this script itself created.
+if vpn_profile_active; then
+  sqlite3 "$db" "INSERT INTO Tags (Label) SELECT 'vpn' WHERE NOT EXISTS (SELECT 1 FROM Tags WHERE Label='vpn');"
+  vpn_tag=$(sqlite3 "$db" "SELECT Id FROM Tags WHERE Label='vpn' ORDER BY Id LIMIT 1;")
+  sqlite3 "$db" "
+    INSERT INTO IndexerProxies (Name, Implementation, Settings, ConfigContract, Tags)
+    SELECT 'VPN', 'Http', json_object('host','gluetun','port',8888), 'HttpSettings', json_array($vpn_tag)
+    WHERE NOT EXISTS (SELECT 1 FROM IndexerProxies WHERE Implementation='Http' AND Name='VPN');"
+  sqlite3 "$db" "
+    UPDATE IndexerProxies
+       SET Settings = json_set(Settings,'\$.host','gluetun','\$.port',8888),
+           Tags = json_array($vpn_tag)
+     WHERE Implementation='Http' AND Name='VPN';"
+  log_ok "prowlarr.db" "vpn tag (id $vpn_tag) + Http proxy -> gluetun:8888"
+fi
+
+# --- FlareSolverr proxy: always re-point at gluetun ---
+#
+# Prowlarr no longer shares byparr's network namespace (it's on the bridge),
+# so `http://localhost:8191/` now resolves to Prowlarr itself. Use json_set
+# so the sibling `requestTimeout` field survives untouched.
+sqlite3 "$db" "
+  UPDATE IndexerProxies
+     SET Settings = json_set(Settings,'\$.host','http://gluetun:8191/')
+   WHERE Implementation='FlareSolverr';"
