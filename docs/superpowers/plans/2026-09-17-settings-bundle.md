@@ -53,7 +53,13 @@ CREATE UNIQUE INDEX "IX_Indexers_Name" ON "Indexers" ("Name" ASC);
 | `tests/settings_bundle_import.test` | Tag remapping, upsert-by-name, idempotence |
 | `tests/settings_bundle_roundtrip.test` | Export → import across differently-seeded installs |
 
-Run the suite with `scripts/test`. Baseline is **144 passed, 0 failed**.
+Run the suite with `scripts/test`. Baseline is **150 passed, 0 failed**.
+
+**Assertion idiom:** never write `! cmd` — bash exempts it from `set -e`, so it
+asserts nothing unless it is a function's final statement, and `scripts/test`
+now refuses to run when it finds one. Use `refute <cmd>` or `refute_grep
+<pattern> <file>` (both provided by `tests/lib/assert`, sourced by the runner),
+or `if <compound>; then return 1; fi` for subshells and pipelines.
 
 ---
 
@@ -144,13 +150,13 @@ test_export_excludes_secrets_and_generated_values() {
   # The test that stops a future change quietly widening the bundle.
   local inst; inst=$(_make_install)
   local b; b=$(_export "$inst")
-  ! grep -q 'WIREGUARD_PRIVATE_KEY' "$b/env.subset"
-  ! grep -q 'VPN_SERVICE_PROVIDER' "$b/env.subset"
-  ! grep -q 'HOST_LAN_IP' "$b/env.subset"
-  ! grep -q 'LAN_SUBNET' "$b/env.subset"
-  ! grep -q 'SABNZBD_API_KEY' "$b/env.subset"
-  ! grep -q 'QBITTORRENT_PASSWORD' "$b/env.subset"
-  ! grep -q 'COMPOSE_PROFILES' "$b/env.subset"
+  refute_grep 'WIREGUARD_PRIVATE_KEY' \"$b/env.subset\"
+  refute_grep 'VPN_SERVICE_PROVIDER' \"$b/env.subset\"
+  refute_grep 'HOST_LAN_IP' \"$b/env.subset\"
+  refute_grep 'LAN_SUBNET' \"$b/env.subset\"
+  refute_grep 'SABNZBD_API_KEY' \"$b/env.subset\"
+  refute_grep 'QBITTORRENT_PASSWORD' \"$b/env.subset\"
+  refute_grep 'COMPOSE_PROFILES' \"$b/env.subset\"
   rm -rf "$inst" "$b"
 }
 
@@ -177,16 +183,16 @@ test_export_sab_subset_keeps_categories_drops_api_key_and_server() {
   grep -q '^\[categories\]' "$b/sabnzbd.subset.ini"
   grep -q '^\[\[movies\]\]' "$b/sabnzbd.subset.ini"
   grep -q 'pre_check' "$b/sabnzbd.subset.ini"
-  ! grep -q 'api_key' "$b/sabnzbd.subset.ini"
-  ! grep -q 'server1' "$b/sabnzbd.subset.ini"
-  ! grep -q 'somepass' "$b/sabnzbd.subset.ini"
+  refute_grep 'api_key' \"$b/sabnzbd.subset.ini\"
+  refute_grep 'server1' \"$b/sabnzbd.subset.ini\"
+  refute_grep 'somepass' \"$b/sabnzbd.subset.ini\"
   rm -rf "$inst" "$b"
 }
 
 test_export_refuses_an_install_without_env() {
   local root; root=$(mktemp -d)
   local out; out=$(mktemp -d)
-  ! scripts/settings-bundle export "$root" "$out" >/dev/null 2>&1
+  refute scripts/settings-bundle export "$root" "$out" >/dev/null 2>&1
   rm -rf "$root" "$out"
 }
 ```
@@ -510,13 +516,13 @@ test_import_merges_sab_categories() {
 test_import_rejects_an_unknown_bundle_format() {
   local inst; inst=$(_fresh_install); local b; b=$(_bundle)
   printf '{"format":99}\n' > "$b/SETTINGS-MANIFEST"
-  ! scripts/settings-bundle import "$b" "$inst" >/dev/null 2>&1
+  refute scripts/settings-bundle import "$b" "$inst" >/dev/null 2>&1
   rm -rf "$inst" "$b"
 }
 
 test_import_refuses_an_install_that_was_never_set_up() {
   local root; root=$(mktemp -d); local b; b=$(_bundle)
-  ! scripts/settings-bundle import "$b" "$root" >/dev/null 2>&1
+  refute scripts/settings-bundle import "$b" "$root" >/dev/null 2>&1
   rm -rf "$root" "$b"
 }
 ```
@@ -757,8 +763,8 @@ test_roundtrip_carries_user_settings_and_not_secrets() {
   # the tag was remapped from source id 7 to target id 3
   [[ "$(sqlite3 "$dst/config/prowlarr/prowlarr.db" "SELECT Tags FROM Indexers WHERE Name='NZBgeek';")" == *3* ]]
   # secrets and generated values did NOT travel
-  ! grep -q 'WIREGUARD_PRIVATE_KEY' "$dst/.env"
-  ! grep -q 'sourcekey' "$dst/.env"
+  refute_grep 'WIREGUARD_PRIVATE_KEY' \"$dst/.env\"
+  refute_grep 'sourcekey' \"$dst/.env\"
   grep -q '^SABNZBD_API_KEY=targetkey$' "$dst/.env"
 
   rm -rf "$src" "$dst" "$b"
@@ -772,7 +778,7 @@ test_backup_settings_only_produces_a_tarball_with_the_four_members() {
   tar tzf "$out" | grep -q 'SETTINGS-MANIFEST'
   tar tzf "$out" | grep -q 'env.subset'
   tar tzf "$out" | grep -q 'indexers.json'
-  ! tar tzf "$out" | grep -q 'prowlarr.db'
+  refute sh -c \"tar tzf "$out" | grep -q 'prowlarr.db'\"
   rm -rf "$src" "$(dirname "$out")"
 }
 ```
