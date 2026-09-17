@@ -1,0 +1,376 @@
+#!/usr/bin/env bash
+# scripts/ship — deterministic release mechanics for prowlarr-stack. The /ship
+# skill drives this; the only step left to a human or model is writing the
+# user-facing release notes. Version math, the upgrade-path gate, changelog
+# insertion, commit, tag, push and post-tag verification live here.
+#
+# Subcommands:
+#
+#   prepare <major|minor|patch>
+#       Read-only. Prints the release facts (last tag, next version, notes-file
+#       path, commits since the last tag) in KEY=VALUE form.
+#
+#   check [--fast] [--allow-migration-change] [--allow-seed-change] [--allow-env-change]
+#       Upgrade-path gate: what the PREVIOUS release's ./update needs from the
+#       code it swaps in, and what existing installs will and won't receive.
+#       Exits non-zero with a FAILED list. --fast skips scripts/release-checks.
+#
+#   release <major|minor|patch> --notes <file> [--dry-run]
+#       Inserts the notes into CHANGELOG.md under "## [X.Y.Z] - <date>" (the
+#       header .github/workflows/release.yml parses), commits, pushes main,
+#       tags vX.Y.Z, pushes the tag. The notes file holds the body only. There
+#       is no version file: the tag is the version, and CI injects it into the
+#       tarball as .version.
+#
+#   verify [<version>] [--timeout <seconds>]
+#       Polls the GitHub release for the tag (default: the last tag) until the
+#       tarball + SHA256SUMS are present; fails fast if the workflow failed.
+#
+# Refuses to run on an installed stack (.version present). Git only, from main.
+set -euo pipefail
+
+REPO_SLUG="media-centaur/prowlarr-stack"
+
+# Entry points the previous release's ./update runs after swapping the new code
+# in: setup, run-migrations, check on every upgrade; restore (and backup, which
+# it calls) on rollback; uninstall is what the README tells users to run.
+ARCHIVE_ENTRY_POINTS=(setup check update backup restore uninstall scripts/run-migrations)
+
+# defaults/ files ./setup refreshes on every run. Every other seed copies only
+# when the destination is absent, so existing installs never receive a change.
+SEEDS_REFRESHED_EVERY_RUN='^defaults/(sabnzbd/scripts/move-finished\.sh|prowlarr-stack.*\.(service|timer))$'
+
+banner() { echo "==> $1"; }
+fail() { echo "FAILED: $1" >&2; exit 1; }
+
+last_tag() { git tag --sort=-v:refname | head -n1; }
+
+# next_version <level> <last_tag> — the X.Y.Z that <level> bumps <last_tag> to.
+next_version() {
+  local level="$1" current="${2#v}" major minor patch
+  IFS=. read -r major minor patch <<<"$current"
+  case "$level" in
+    major) echo "$((major + 1)).0.0" ;;
+    minor) echo "${major}.$((minor + 1)).0" ;;
+    patch) echo "${major}.${minor}.$((patch + 1))" ;;
+    *) echo "bump level must be major|minor|patch, got: $level" >&2; return 1 ;;
+  esac
+}
+
+# validate_notes <file> — the body only: non-empty, has entries, no version header.
+validate_notes() {
+  local notes="$1"
+  [[ -s "$notes" ]] || { echo "notes file is missing or empty: $notes" >&2; return 1; }
+  if grep -qE '^## \[' "$notes"; then
+    echo "notes file contains a version header — provide the body only; the script adds '## [X.Y.Z] - <date>'" >&2
+    return 1
+  fi
+  grep -q '^- ' "$notes" || { echo "notes file has no '- ' entries" >&2; return 1; }
+}
+
+# insert_changelog <changelog> <version> <date> <notes_file>
+# Puts "## [<version>] - <date>" + the notes body after the [Unreleased] block:
+# before the first released section, or at the end when there is none yet.
+insert_changelog() {
+  local file="$1" version="$2" date="$3" notes="$4" tmp
+  tmp=$(mktemp)
+  awk -v header="## [$version] - $date" -v notes_file="$notes" '
+    function emit() {
+      print header
+      print ""
+      while ((getline line < notes_file) > 0) print line
+      print ""
+      inserted = 1
+    }
+    !inserted && /^## \[/ && $0 !~ /^## \[Unreleased\]/ { emit() }
+    { print }
+    END { if (!inserted) { print ""; emit() } }
+  ' "$file" > "$tmp"
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
+# check_migration_tests [root] — every migrations/NNNN-* has tests/migration_NNNN.test.
+# A migration runs once per install and is never re-run, so its test is the only
+# thing that ever verifies it.
+check_migration_tests() {
+  local root="${1:-.}" m id ok=0
+  for m in "$root"/migrations/[0-9]*; do
+    [[ -e "$m" ]] || continue
+    id=$(basename "$m" | cut -d- -f1)
+    [[ -f "$root/tests/migration_$id.test" ]] && continue
+    echo "migration $(basename "$m") has no tests/migration_$id.test" >&2
+    ok=1
+  done
+  return "$ok"
+}
+
+# check_archive_contract [root] — the entry points ./update runs must exist and
+# be executable in what will be shipped.
+check_archive_contract() {
+  local root="${1:-.}" f ok=0
+  for f in "${ARCHIVE_ENTRY_POINTS[@]}"; do
+    [[ -x "$root/$f" ]] && continue
+    echo "$f is missing or not executable" >&2
+    ok=1
+  done
+  [[ -f "$root/scripts/lib/common" ]] || { echo "scripts/lib/common is missing" >&2; ok=1; }
+  return "$ok"
+}
+
+require_source_repo() {
+  [[ -f .version ]] && fail "this is an INSTALLED stack (.version present) — release from the source repo"
+  [[ -d .git ]] || fail "not a git repo"
+}
+
+require_main_and_current() {
+  local branch
+  branch=$(git rev-parse --abbrev-ref HEAD)
+  [[ "$branch" == "main" ]] || fail "on branch '$branch' — releases ship from main"
+  git fetch --quiet origin main
+  if [[ -n "$(git log --oneline HEAD..origin/main)" ]]; then
+    fail "main is behind origin/main — pull/rebase first; refusing to ship from a stale tip"
+  fi
+}
+
+# ---------------------------------------------------------------- prepare
+
+cmd_prepare() {
+  local level="${1:-}"
+  [[ -n "$level" ]] || fail "usage: scripts/ship prepare <major|minor|patch>"
+  require_source_repo
+  require_main_and_current
+
+  local tag next
+  tag=$(last_tag)
+  [[ -n "$tag" ]] || fail "no vX.Y.Z tag found to bump from"
+  next=$(next_version "$level" "$tag") || fail "bad bump level: $level"
+
+  echo "LAST_TAG=$tag"
+  echo "NEXT_VERSION=$next"
+  echo "NEXT_TAG=v$next"
+  echo "DATE=$(date +%F)"
+  echo "NOTES_FILE=${TMPDIR:-/tmp}/prowlarr-stack-notes-v$next.md"
+  if [[ -n "$(git status --porcelain)" ]]; then
+    echo "WORKING_TREE=dirty (commit before release)"
+  else
+    echo "WORKING_TREE=clean"
+  fi
+  echo "COMMITS_SINCE_${tag}:"
+  git log --pretty=format:"- %s" "${tag}..HEAD"
+  echo
+}
+
+# ------------------------------------------------------------------ check
+
+cmd_check() {
+  local fast=false allow_migration=false allow_seed=false allow_env=false
+  for arg in "$@"; do
+    case "$arg" in
+      --fast) fast=true ;;
+      --allow-migration-change) allow_migration=true ;;
+      --allow-seed-change) allow_seed=true ;;
+      --allow-env-change) allow_env=true ;;
+      *) fail "unknown flag for check: $arg" ;;
+    esac
+  done
+
+  require_source_repo
+  local tag failures=()
+  tag=$(last_tag)
+  banner "Upgrade-path check (diffing against $tag)"
+  require_main_and_current
+
+  banner "Shipped migrations"
+  # A migration that existed at the last tag has already run on upgraded
+  # installs and will never run there again; an edit changes only fresh installs.
+  local path edited=()
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    git cat-file -e "$tag:$path" 2>/dev/null && edited+=("$path")
+  done < <(git diff --name-only "${tag}..HEAD" -- migrations/)
+  if [[ "${#edited[@]}" -gt 0 && "$allow_migration" == false ]]; then
+    git --no-pager diff "${tag}..HEAD" -- "${edited[@]}"
+    failures+=("shipped migration(s) edited since $tag: ${edited[*]} — installs that applied them will not re-run them; re-run with --allow-migration-change only if the edit has no behavioural effect")
+  fi
+  local missing_tests
+  if ! missing_tests=$(check_migration_tests . 2>&1 >/dev/null); then
+    failures+=("$missing_tests")
+  fi
+
+  banner "Seed files (defaults/)"
+  local seeds=()
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    [[ "$path" =~ $SEEDS_REFRESHED_EVERY_RUN ]] && continue
+    seeds+=("$path")
+  done < <(git diff --name-only "${tag}..HEAD" -- defaults/)
+  if [[ "${#seeds[@]}" -gt 0 && "$allow_seed" == false ]]; then
+    git --no-pager diff "${tag}..HEAD" -- "${seeds[@]}"
+    failures+=("seed file(s) changed since $tag: ${seeds[*]} — existing installs never receive a seed change; re-run with --allow-seed-change if ./setup converges them on the same change, or the change is fresh-install-only by design")
+  fi
+
+  banner ".env contract"
+  local new_vars
+  new_vars=$(git diff "${tag}..HEAD" -- .env.example | grep -E '^\+[A-Z_]+=' | sed 's/^+//' || true)
+  if [[ -n "$new_vars" && "$allow_env" == false ]]; then
+    echo "$new_vars"
+    failures+=("new variable(s) in .env.example since $tag — ./setup --non-interactive fails on a missing required one, which fails every upgrade; re-run with --allow-env-change if each is optional or defaulted")
+  fi
+
+  banner "Changelog sanity"
+  if [[ ! -f CHANGELOG.md ]] || ! head -1 CHANGELOG.md | grep -q '^# Changelog'; then
+    failures+=("CHANGELOG.md missing or malformed (must start with '# Changelog')")
+  elif ! grep -q '^## \[Unreleased\]' CHANGELOG.md; then
+    failures+=("CHANGELOG.md has no '## [Unreleased]' section — release inserts below it")
+  fi
+
+  banner "Archive contract (git archive HEAD)"
+  # The tarball is built from HEAD, not the working tree, so an uncommitted
+  # chmod +x or an untracked file cannot mask a broken release.
+  local archive_dir archive_problems
+  archive_dir=$(mktemp -d)
+  git archive --format=tar HEAD | tar -x -C "$archive_dir"
+  if ! archive_problems=$(check_archive_contract "$archive_dir" 2>&1 >/dev/null); then
+    failures+=("archive contract: $archive_problems")
+  fi
+  rm -rf "$archive_dir"
+
+  if [[ "$fast" == false ]]; then
+    banner "scripts/release-checks"
+    ./scripts/release-checks >/dev/null 2>&1 || failures+=("scripts/release-checks failed — run it to see which check")
+  else
+    banner "Skipping scripts/release-checks (--fast)"
+  fi
+
+  if [[ "${#failures[@]}" -gt 0 ]]; then
+    echo
+    echo "UPGRADE-PATH CHECK FAILED"
+    for failure in "${failures[@]}"; do
+      echo "  - FAILED: $failure"
+    done
+    exit 1
+  fi
+  echo
+  echo "UPGRADE-PATH CHECK PASSED"
+}
+
+# ---------------------------------------------------------------- release
+
+cmd_release() {
+  local level="${1:-}" notes="" dry_run=false
+  [[ -n "$level" ]] || fail "usage: scripts/ship release <major|minor|patch> --notes <file> [--dry-run]"
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --notes) notes="${2:-}"; shift 2 ;;
+      --dry-run) dry_run=true; shift ;;
+      *) fail "unknown flag for release: $1" ;;
+    esac
+  done
+  [[ -n "$notes" ]] || fail "release requires --notes <file>"
+  local problem
+  problem=$(validate_notes "$notes" 2>&1 >/dev/null) || fail "$problem"
+
+  require_source_repo
+  require_main_and_current
+  if [[ "$dry_run" == false && -n "$(git status --porcelain)" ]]; then
+    fail "working tree dirty — commit feature work before releasing"
+  fi
+
+  local tag next date_today
+  tag=$(last_tag)
+  next=$(next_version "$level" "$tag") || fail "bad bump level: $level"
+  date_today=$(date +%F)
+  git rev-parse "v$next" >/dev/null 2>&1 && fail "tag v$next already exists"
+
+  banner "Releasing v$next (from $tag, $level bump)"
+  if [[ "$dry_run" == true ]]; then
+    local preview; preview=$(mktemp)
+    cp CHANGELOG.md "$preview"
+    insert_changelog "$preview" "$next" "$date_today" "$notes"
+    banner "[dry-run] CHANGELOG.md head would become:"
+    head -30 "$preview"
+    rm -f "$preview"
+    banner "[dry-run] then: commit changelog, push main, tag v$next, push tag"
+    return 0
+  fi
+
+  banner "Writing CHANGELOG.md entry"
+  insert_changelog CHANGELOG.md "$next" "$date_today" "$notes"
+  git add CHANGELOG.md
+  git commit -m "docs: changelog for v$next"
+
+  banner "Pushing main"
+  git push origin main
+
+  banner "Tagging v$next and pushing the tag"
+  git tag -a "v$next" -m "v$next"
+  git push origin "v$next"
+
+  echo
+  echo "RELEASED v$next — the tag triggers .github/workflows/release.yml."
+  echo "Run: scripts/ship verify $next"
+}
+
+# ----------------------------------------------------------------- verify
+
+cmd_verify() {
+  local version="" timeout=900
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --timeout) timeout="${2:-900}"; shift 2 ;;
+      *) version="${1#v}"; shift ;;
+    esac
+  done
+  [[ -n "$version" ]] || version=$(last_tag | sed 's/^v//')
+  local tag="v$version"
+
+  banner "Verifying GitHub release $tag (timeout ${timeout}s)"
+  local deadline=$((SECONDS + timeout))
+  while [[ $SECONDS -lt $deadline ]]; do
+    local run_state run_status run_conclusion run_url
+    run_state=$(gh run list --repo "$REPO_SLUG" --workflow=release.yml --branch "$tag" --limit 1 \
+      --json status,conclusion,url \
+      --jq '(.[0].status // "none") + " " + (.[0].conclusion // "") + " " + (.[0].url // "")' 2>/dev/null) || run_state="unknown"
+    read -r run_status run_conclusion run_url <<<"$run_state"
+    if [[ "$run_conclusion" == "failure" || "$run_conclusion" == "cancelled" ]]; then
+      fail "release workflow $run_conclusion — $run_url"
+    fi
+
+    local assets
+    assets=$(gh release view "$tag" --repo "$REPO_SLUG" --json assets --jq '.assets[].name' 2>/dev/null || true)
+    if [[ -n "$assets" ]]; then
+      local missing=()
+      grep -qx "prowlarr-stack-${tag}.tar.gz" <<<"$assets" || missing+=("prowlarr-stack-${tag}.tar.gz")
+      grep -qx "SHA256SUMS" <<<"$assets" || missing+=("SHA256SUMS")
+      if [[ "${#missing[@]}" -eq 0 ]]; then
+        echo "RELEASE VERIFIED — assets present:"
+        sed 's/^/  /' <<<"$assets"
+        return 0
+      fi
+    fi
+    echo "  waiting… (workflow: ${run_status:-unknown})"
+    sleep 15
+  done
+  fail "timed out after ${timeout}s waiting for $tag assets — check: gh run list --repo $REPO_SLUG --workflow=release.yml"
+}
+
+# ------------------------------------------------------------------- main
+
+usage() {
+  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+  exit 1
+}
+
+# Sourced by tests/ship.test for the functions above; dispatch only when run.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  cd "$(dirname "$0")/.."
+  case "${1:-}" in
+    prepare) shift; cmd_prepare "$@" ;;
+    check) shift; cmd_check "$@" ;;
+    release) shift; cmd_release "$@" ;;
+    verify) shift; cmd_verify "$@" ;;
+    *) usage ;;
+  esac
+fi

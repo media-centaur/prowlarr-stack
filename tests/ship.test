@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# scripts/ship is the release path the /ship skill drives. The parts with
+# fixed, checkable semantics live here: version math from the last tag, the
+# changelog insert that .github/workflows/release.yml parses back out, and the
+# gates that protect ./update on existing installs.
+set -u
+
+# shellcheck source=../scripts/ship
+source scripts/ship
+
+# The same extraction release.yml and the old scripts/release used: the block
+# under "## [X.Y.Z]" up to the next "## [" or EOF. Duplicated here on purpose —
+# it asserts the contract with CI, so it must not drift with the implementation.
+_extract_section() {
+  awk -v v="$1" '
+    /^## \[/ { if (inb) exit; inb = ($0 ~ "\\["v"\\]") ? 1 : 0; if (inb) { print; next } next }
+    inb { print }
+  ' "$2"
+}
+
+_make_changelog() {
+  local f; f=$(mktemp --suffix=.md)
+  cat > "$f" <<'MD'
+# Changelog
+
+Intro line.
+
+## [Unreleased]
+
+### Added
+### Changed
+### Fixed
+
+## [1.3.1] - 2026-09-17
+
+### Fixed
+- **Old fix.** Detail.
+MD
+  echo "$f"
+}
+
+_make_notes() {
+  local f; f=$(mktemp --suffix=.md)
+  printf '### Fixed\n- **New fix.** Detail.\n' > "$f"
+  echo "$f"
+}
+
+# --- next_version ---
+
+test_next_version_patch() { [[ "$(next_version patch v1.3.1)" == "1.3.2" ]]; }
+test_next_version_minor() { [[ "$(next_version minor v1.3.1)" == "1.4.0" ]]; }
+test_next_version_major() { [[ "$(next_version major v1.3.1)" == "2.0.0" ]]; }
+test_next_version_rejects_unknown_level() { refute next_version hotfix v1.3.1 2>/dev/null; }
+
+# --- changelog insert ---
+
+test_insert_places_the_release_after_unreleased_and_before_the_previous_one() {
+  local cl notes; cl=$(_make_changelog); notes=$(_make_notes)
+  insert_changelog "$cl" "1.3.2" "2026-09-17" "$notes"
+  local headers; headers=$(grep -E '^## \[' "$cl" | tr '\n' '|')
+  [[ "$headers" == "## [Unreleased]|## [1.3.2] - 2026-09-17|## [1.3.1] - 2026-09-17|" ]]
+  rm -f "$cl" "$notes"
+}
+
+test_inserted_section_is_what_the_release_workflow_extracts() {
+  local cl notes; cl=$(_make_changelog); notes=$(_make_notes)
+  insert_changelog "$cl" "1.3.2" "2026-09-17" "$notes"
+  local section; section=$(_extract_section 1.3.2 "$cl")
+  grep -q '^## \[1.3.2\] - 2026-09-17$' <<<"$section"
+  grep -q '^- \*\*New fix.\*\* Detail.$' <<<"$section"
+  refute_grep 'Old fix' <(echo "$section")
+  rm -f "$cl" "$notes"
+}
+
+test_insert_leaves_the_unreleased_block_intact() {
+  local cl notes; cl=$(_make_changelog); notes=$(_make_notes)
+  insert_changelog "$cl" "1.3.2" "2026-09-17" "$notes"
+  local unreleased; unreleased=$(_extract_section Unreleased "$cl")
+  grep -q '^### Added$' <<<"$unreleased" && grep -q '^### Fixed$' <<<"$unreleased"
+  refute_grep 'New fix' <(echo "$unreleased")
+  rm -f "$cl" "$notes"
+}
+
+test_insert_appends_when_no_release_section_exists_yet() {
+  local cl notes; cl=$(mktemp --suffix=.md); notes=$(_make_notes)
+  printf '# Changelog\n\n## [Unreleased]\n\n### Fixed\n' > "$cl"
+  insert_changelog "$cl" "0.1.0" "2026-09-17" "$notes"
+  [[ "$(_extract_section 0.1.0 "$cl" | grep -c 'New fix')" -eq 1 ]]
+  rm -f "$cl" "$notes"
+}
+
+test_notes_with_a_version_header_are_refused() {
+  local notes; notes=$(mktemp --suffix=.md)
+  printf '## [1.3.2] - 2026-09-17\n- x\n' > "$notes"
+  refute validate_notes "$notes" 2>/dev/null
+  rm -f "$notes"
+}
+
+test_empty_notes_are_refused() {
+  local notes; notes=$(mktemp --suffix=.md)
+  refute validate_notes "$notes" 2>/dev/null
+  rm -f "$notes"
+}
+
+# --- gates ---
+
+test_every_migration_needs_a_test() {
+  # A migration ships once and never re-runs on an install that applied it, so
+  # it is only ever verified by its test. A root with 0005 but no test fails.
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/migrations" "$root/tests"
+  touch "$root/migrations/0005-something" "$root/tests/migration_0004.test"
+  refute check_migration_tests "$root" 2>/dev/null
+  touch "$root/tests/migration_0005.test"
+  check_migration_tests "$root"
+  rm -rf "$root"
+}
+
+test_archive_contract_wants_every_entry_point_executable() {
+  # After the swap, the PREVIOUS release's ./update runs the NEW setup, check,
+  # run-migrations and (on rollback) restore. A non-executable one breaks every
+  # user's upgrade at the same time.
+  local root; root=$(mktemp -d)
+  for f in setup check update backup restore uninstall scripts/run-migrations; do
+    mkdir -p "$root/$(dirname "$f")"; printf '#!/bin/sh\n' > "$root/$f"; chmod +x "$root/$f"
+  done
+  printf '' > "$root/scripts/lib_common_placeholder"; mkdir -p "$root/scripts/lib"; printf '' > "$root/scripts/lib/common"
+  check_archive_contract "$root"
+  chmod -x "$root/scripts/run-migrations"
+  refute check_archive_contract "$root" 2>/dev/null
+  rm -rf "$root"
+}

@@ -239,14 +239,14 @@ The project is tracked with plain **git**. Standard workflow:
 
 - `git log --oneline` — history
 - `git add -A && git commit -m "…"` — stage + commit
-- `git push origin main` — publish (or use `./scripts/release vX.Y.Z`, which does this plus tagging)
+- `git push origin main` — publish (a release goes through `scripts/ship`, which pushes and tags)
 
 ## Release pipeline
 
 The stack is distributed as versioned GitHub Releases. Workflow:
 
-1. Maintainer edits `CHANGELOG.md` under `[Unreleased]` as they go.
-2. At release time: rename `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD`, open a new empty `[Unreleased]`, run `./scripts/bump-images` to update pinned upstream image versions, commit, tag `vX.Y.Z`, push the tag.
+1. Maintainer may collect notes under `[Unreleased]` in `CHANGELOG.md` as they go; the release itself takes its notes from a file.
+2. At release time: `scripts/ship release <level> --notes <file>` inserts a `## [X.Y.Z] - YYYY-MM-DD` section below `[Unreleased]`, commits, pushes `main`, tags `vX.Y.Z` and pushes the tag. `scripts/ship check` gates it first (see `docs/upgrading.md`). Image pins are bumped beforehand with `./scripts/bump-images` when a release is meant to carry them.
 3. GitHub Actions' `release.yml` builds `prowlarr-stack-vX.Y.Z.tar.gz` from `git archive` (with `.version` injected), computes `SHA256SUMS`, parses the `[X.Y.Z]` block from `CHANGELOG.md`, and publishes a GitHub Release with all three.
 4. End users install from the release via `install.sh` (curl-pipe) or by manually downloading the tarball. Both paths verify SHA256 before extraction and delegate to the tarball's `./install`.
 

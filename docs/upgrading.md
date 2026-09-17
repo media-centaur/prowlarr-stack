@@ -157,23 +157,26 @@ Image bumps have their own checklist in *Bumping pinned images* above.
    `migrations/NNNN-slug` executable, idempotent and a no-op on already-correct
    state. Add a `tests/*.test` for it. For image bumps, work the checklist in
    *Bumping pinned images* above to decide whether one is needed at all.
-3. **Update `CHANGELOG.md`** — move items from `[Unreleased]` into a new
-   `## [X.Y.Z] - YYYY-MM-DD` section (the release workflow parses this block for
-   the GitHub Release notes).
-4. **Commit** the change (and the CHANGELOG) on `main`.
-5. **Cut it:**
+3. **Commit** the change on `main`. Leave `CHANGELOG.md` alone: the release step
+   writes the version section from the notes you give it.
+4. **Cut it** with the `/ship` skill (`/ship patch`, `minor` or `major`), which
+   drives `scripts/ship`:
 
    ```sh
-   ./scripts/release vX.Y.Z
+   scripts/ship prepare patch                 # last tag, next version, notes path
+   scripts/ship check                         # upgrade-path gate; FAILED: list on any problem
+   scripts/ship release patch --notes <file>  # changelog section, commit, push main, tag, push tag
+   scripts/ship verify                        # waits for release.yml to publish the tarball
    ```
 
-   `scripts/release` does the rest deterministically: verifies the CHANGELOG has a
-   `## [X.Y.Z]` section, runs `./scripts/release-checks` (shellcheck +
-   `docker compose config` + the bash test suite — same as CI), pushes `main`,
-   tags `vX.Y.Z`, pushes the tag (triggering `.github/workflows/release.yml`,
-   which rebuilds the checks and publishes `prowlarr-stack-vX.Y.Z.tar.gz` +
-   `SHA256SUMS`), then waits for CI and confirms the release published. Use
-   `--dry-run` to gate without pushing, `--yes` to skip the prompt.
+   The notes file is the body of the `## [X.Y.Z]` section only — `### Fixed` /
+   `### Changed` / `### Added` bullets — and `release` adds the header the
+   release workflow parses. `check` flags edits to a shipped migration, changes
+   to a seed file under `defaults/` that existing installs would never receive,
+   and new `.env.example` variables; each names the `--allow-*` flag to pass once
+   you have confirmed the criterion it states. It also runs
+   `./scripts/release-checks` (same as CI) and checks the entry points in
+   `git archive HEAD`. `.claude/ship-profile.md` holds the rest.
 
 Operators then get it via `./update`.
 

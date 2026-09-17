@@ -14,7 +14,8 @@ prowlarr-stack-backup-*.tar.gz
 config.pre-restore-*/
 
 # AI-assistant tooling (per-developer state and instructions; not part of the project)
-.claude/
+.claude/*
+!.claude/ship-profile.md
 CLAUDE.md
 .serena/
 .anthropic/
