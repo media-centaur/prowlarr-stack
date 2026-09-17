@@ -88,7 +88,7 @@ egress to prove a proxied request end to end.
 | Prowlarr placement | **Direct, publishes its own 9696** | Usenet search must survive tunnel loss. Prowlarr's own egress becomes the ISP path; tunnel access comes from the proxy. |
 | byparr placement | **Stays in gluetun's namespace, profile-gated** | Cloudflare solving serves torrent indexers only, so byparr is torrent-side by definition. Namespace membership remains the right mechanism for a headless browser — there is no per-request routing to express. |
 | Proxy transport | **`Http` to `gluetun:8888`, no auth, not published to the host** | Reachable only across the compose bridge. `Socks5` is equivalent here; HTTP is the simpler of the two to seed and to debug. Credentials add a secret to rotate for no boundary gained. |
-| Tagging | **`setup` auto-tags every torrent-protocol indexer, idempotently** | Matches the stack's philosophy — setup wires everything, the user supplies only credentials. A rule that is enforced beats a rule that is documented. |
+| Tagging | **`setup` auto-tags every torrent-protocol indexer, idempotently, via `scripts/tag-vpn-indexers`** | Matches the stack's philosophy — setup wires everything, the user supplies only credentials. A rule that is enforced beats a rule that is documented. Implemented as a script rather than a migration because protocol is only available from the API, not the database. |
 | Isolation verification | **Per-indexer tag assertion replaces the exit-IP comparison** | Prowlarr's exit IP is now always the ISP, making the old comparison meaningless. Asserting each torrent indexer's tag checks the actual intent rather than inferring it from a container's exit IP. |
 | Existing installs | **Automatic migration on `./update`** | The stack is a product with a migration mechanism; no manual step. |
 
@@ -149,7 +149,12 @@ Extends the existing `json_set`-based idempotent patching:
   carrying the `vpn` tag. Present only when the profile is active.
 - Re-point the existing `FlareSolverr` proxy from `http://localhost:8191/` — which
   worked only because Prowlarr shared byparr's namespace — to `http://gluetun:8191/`.
-- Auto-tag every indexer with `protocol = torrent` with the `vpn` tag.
+- Auto-tagging torrent indexers is **not** done here. The `Indexers` table stores
+  no protocol column — `Implementation` is `Newznab`, `Torznab`, or `Cardigann`,
+  and Cardigann is definition-driven and may be either protocol. Protocol is only
+  reliably available from `GET /api/v1/indexer`, so tagging lives in a new
+  `scripts/tag-vpn-indexers`, a sibling of the existing `scripts/tag-cf-indexers`,
+  which `setup` invokes once the stack is up.
 
 ### 4. `check` and `scripts/lib/common`
 
@@ -176,7 +181,9 @@ For installs created before this change:
 - Write `COMPOSE_PROFILES=vpn` into `.env` when VPN credentials are present, so
   existing VPN users keep gluetun and byparr.
 - Re-point the `FlareSolverr` proxy host to `gluetun:8191`.
-- Create the `vpn` tag and `Http` proxy, and tag existing torrent indexers.
+- Create the `vpn` tag and the `Http` proxy row. Indexer tagging is left to
+  `scripts/tag-vpn-indexers`, which `setup` runs after start — so existing
+  installs are tagged during the same `./update` that applies this migration.
 
 The migration is idempotent and follows the numbered-directory convention of
 `0001`–`0003`.
