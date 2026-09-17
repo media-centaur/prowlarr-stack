@@ -783,12 +783,21 @@ test_backup_settings_only_produces_a_tarball_with_the_four_members() {
 }
 ```
 
-NOTE: `backup` currently operates on its own directory. If `--install-dir` does
-not exist as a flag, add it, or restructure the test to run `./backup` with the
-CWD set appropriately. Use whichever fits the existing script — but the
-assertion that `prowlarr.db` is **absent** from a settings-only tarball must
-survive, because that is what proves the bundle is a subset and not a full
-backup under a new name.
+RESOLVED: do **not** add an `--install-dir` flag. `./backup` operates on its own
+directory (`cd "$(dirname "$0")"`), and `tests/backup.test` already has the
+idiom for this — `_make_fake_install <dir>` populates a temp directory with the
+minimum surface `./backup` expects (a copy of the script under test,
+`scripts/lib/common`, stub `setup`/`docker-compose.yml`/`.version`, `.env`,
+`config/`) and the tests then run `( cd "$tmp/install" && ./backup ... )`.
+
+Extend that idiom: the settings-only fixture additionally needs
+`scripts/settings-bundle` copied in, a **real SQLite** `prowlarr.db` (the
+existing fixture writes a text marker, which is fine for a full backup but not
+for an export that queries it), and a `config/sabnzbd/sabnzbd.ini`.
+
+Whatever the fixture shape, the assertion that `prowlarr.db` is **absent** from
+a settings-only tarball must survive — that is what proves the bundle is a
+subset and not a full backup under a new name.
 
 - [ ] **Step 2: Run and watch it fail**
 
