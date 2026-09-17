@@ -82,13 +82,20 @@ exists to avoid.
 
 ## Components
 
-### 1. `scripts/lib/settings-bundle`
+### 1. `scripts/settings-bundle`
 
-New sourced library holding the manifest of what belongs in a bundle — the
-`.env` key list, the Prowlarr export query, and the SABnzbd key list — plus
-`export_settings_bundle <install_dir> <out_dir>` and
-`import_settings_bundle <bundle_dir> <install_dir>`. One place defines the
-subset, so `backup` and `restore` cannot disagree about it.
+New Python executable holding the manifest of what belongs in a bundle — the
+`.env` key list, the Prowlarr indexer query, and the SABnzbd key list — with two
+subcommands: `export <install_dir> <out_dir>` and `import <bundle_dir>
+<install_dir>`. One place defines the subset, so `backup` and `restore` cannot
+disagree about it.
+
+Python rather than a sourced bash library: the work is JSON and INI
+manipulation, and this repo already reaches for Python when an INI state machine
+is needed — `scripts/set-sab-config` exists precisely because `configparser`
+cannot parse SABnzbd's double-bracketed subsections. Tag-label resolution and
+indexer upserts are likewise clearer as dictionary operations than as `jexpr`
+SQL strings.
 
 ### 2. `./backup --settings-only`
 
